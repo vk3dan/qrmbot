@@ -7,13 +7,12 @@
 package Location;
 require Exporter;
 @ISA = qw(Exporter);
-@EXPORT = qw(argToCoords qthToCoords coordToGrid geolocate gridToCoord distBearing);
+@EXPORT = qw(argToCoords qthToCoords coordToGrid geolocate gridToCoord distBearing coordToTZ);
 
 use Math::Trig;
 use Math::Trig 'great_circle_distance';
 use Math::Trig 'great_circle_bearing';
 use URI::Escape;
-
 
 sub gridToCoord {
   my $gridstr = shift;
@@ -96,9 +95,10 @@ sub qthToCoords {
     #print;
     chomp;
     if (/OVER_QUERY_LIMIT/) {
-      print "warning: over query limit\n";
+      #print "warning: over query limit\n";
       close(HTTP);
-      exit $exitnonzeroonerror if $tries > 3;
+      print "error: over query limit. please try again.\n" if $tries > 3;
+      exit $::exitnonzeroonerror if $tries > 3;
       goto RESTART;
     }
     if (/<lat>([+-]?\d+.\d+)<\/lat>/) {
@@ -139,15 +139,17 @@ sub geolocate {
   open (HTTP, '-|', "curl -k -s '$url'");
   binmode(HTTP, ":utf8");
   while (<HTTP>) {
-		#print;
+    #print;
     chomp;
 
     if (/OVER_QUERY_LIMIT/) {
-      print "warning: over query limit\n" unless defined($raw) and $raw == 1;
+      #print "warning: over query limit\n" unless defined($raw) and $raw == 1;
       close(HTTP);
-      exit $exitnonzeroonerror if $tries > 3;
+      exit $::exitnonzeroonerror if $tries > 3;
       goto RESTART;
     }
+
+    last if /ZERO_RESULTS/;
 
     if (/<result>/) {
       $newResult = 1;
@@ -225,7 +227,7 @@ sub argToCoords {
     my $ret = qthToCoords($arg);
     if (!defined($ret)) {
       #print "'$arg' not found.\n";
-      #exit $exitnonzeroonerror;
+      #exit $::exitnonzeroonerror;
       return undef;
     }
     ($lat, $lon) = split(',', $ret);
@@ -233,7 +235,7 @@ sub argToCoords {
 
   if (defined($grid)) {
     ($lat, $lon) = split(',', gridToCoord(uc($grid)));
-  } 
+  }
 
   return join(',', $lat, $lon);
 }
@@ -268,4 +270,43 @@ sub distBearing {
 # Example: my @Tokyo  = NESW(139.8, 35.7); # (35.7N 139.8E)
 sub NESW {
   deg2rad($_[0]), deg2rad(90 - $_[1])
+}
+
+sub coordToTZ {
+  my $lat = shift;
+  my $lon = shift;
+
+  my $now = time();
+  my $url = "https://maps.googleapis.com/maps/api/timezone/json?location=$lat,$lon&timestamp=$now";
+
+  my ($dstoffset, $rawoffset, $zoneid, $zonename);
+
+  open (HTTP, '-|', "curl -k -s '$url'");
+  binmode(HTTP, ":utf8");
+  while (<HTTP>) {
+
+    # {
+    #    "dstOffset" : 3600,
+    #    "rawOffset" : -18000,
+    #    "status" : "OK",
+    #    "timeZoneId" : "America/New_York",
+    #    "timeZoneName" : "Eastern Daylight Time"
+    # }
+
+    if (/"(\w+)" : (-?\d+|"[^"]*")/) {
+      my ($k, $v) = ($1, $2);
+      $v =~ s/^"(.*)"$/$1/;
+      #print "$k ==> $v\n";
+      if ($k eq "status" and $v ne "OK") {
+	return undef;
+      }
+      $dstOffset = $v if $k eq "dstOffset";
+      $rawOffset = $v if $k eq "rawOffset";
+      $zoneid = $v if $k eq "timeZoneId";
+      $zonename = $v if $k eq "timeZoneName";
+    }
+  }
+  close(HTTP);
+
+  return $zoneid;
 }

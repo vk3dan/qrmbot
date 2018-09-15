@@ -15,8 +15,10 @@ use Cwd 'realpath';
 use lib dirname(realpath(__FILE__));
 use Colors;
 
+my $timeout = 10;	# 10 seconds
+
+my $username = $ENV{'USER'} || $ENV{'USERNAME'} || getpwuid($<);
 if ($#ARGV < 0 || length($ARGV[0]) == 0) {
-  my $username = $ENV{'USER'} || $ENV{'USERNAME'} || getpwuid($<);
 
   if ($username eq 'eggdrop') {
     print "usage: !muf2 <station>  --or--  !muf2 list (use /msg)\n";
@@ -154,7 +156,7 @@ if (!defined $ursiCode and not $place eq "list") {
 
 if (!defined $ursiCode or $place eq "list") {
 
-  open (STATIONS, '-|', "curl -s -k --max-time 4 --retry 1 \"${stationUrl}\"");
+  open (STATIONS, '-|', "curl -s -k --max-time $timeout --retry 1 \"${stationUrl}\"");
   while (<STATIONS>) {
     if (/^<td.*">([A-Z0-9]+)<\/a><\/big>.*?<big>([^<]*)<\/big>/) {
       my $code = $1;
@@ -166,8 +168,10 @@ if (!defined $ursiCode or $place eq "list") {
       $station=~s/^([a-z])/\U$1\E/;
       #print "$code $station\n";
 
+      my $limit = 65;
+      $limit = 400 if $username eq "eggdrop";
       if (lc($place) eq "list") {
-	if (length $list > 400) {
+	if (length $list > $limit) {
 	  print "$list\n";
 	  $list = "";
 	}
@@ -185,7 +189,8 @@ if (!defined $ursiCode or $place eq "list") {
   my $stationMap = "Map: http://giro.uml.edu/img/giro-map.gif";
 
   if (lc($place) eq "list") {
-    print "$list-- $stationMap\n";
+    print "$list-- $stationMap\n" if $username eq "eggdrop";
+    print "$list\n$stationMap\n" if $username ne "eggdrop";
     exit 0;
   }
 
@@ -205,7 +210,7 @@ my $lat;
 my $lon;
 
 #print "$indexUrl\n";
-open (INDEX, '-|', "curl -s -k --max-time 4 --retry 1 \"${indexUrl}\"");
+open (INDEX, '-|', "curl -s -k --max-time $timeout --retry 1 \"${indexUrl}\"");
 while (<INDEX>) {
 #  print;
   chomp;
@@ -240,7 +245,9 @@ my $ionogramUrl = "https://lgdc.uml.edu/common/ShowIonogram?mid=${mid}";
 
 my $ionogramFile = "/tmp/ionogram.${mid}.png";
 
-system "curl -s -k --max-time 4 --retry 1 \"${ionogramUrl}\" -o ${ionogramFile}";
+system "curl -s -k --max-time $timeout --retry 1 \"${ionogramUrl}\" -o ${ionogramFile}";
+
+die "unable to retrieve $ionogramUrl" if (! -e ${ionogramFile});
 
 my $muf = undef;
 my $ocrdbpath = $ENV{'HOME'}. "/.ionosonde.db/";
@@ -270,5 +277,7 @@ close GOCR;
 
 $mon = sprintf("%02u", $mon);
 $mday = sprintf("%02u", $mday);
+
+$muf = "ERROR" if (!defined($muf));
 
 print bold($station), " ($lat, $lon): MUF @ $year-$mon-$mday ${utc}z: ", bold("$muf MHz"), "\n";

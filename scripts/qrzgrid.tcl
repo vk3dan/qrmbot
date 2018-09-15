@@ -21,6 +21,11 @@ bind pub - !qth grid
 bind msg - !grid msg_grid
 bind msg - !qth msg_grid
 
+bind pub - !time timezone
+bind pub - !tz timezone
+bind msg - !time msg_timezone
+bind msg - !tz msg_timezone
+
 bind pub - !bands bands
 bind msg - !bands msg_bands
 
@@ -108,6 +113,9 @@ bind pub - !graves graves_pub
 bind msg - !sat sat_msg
 bind pub - !sat sat_pub
 
+bind msg - !spacex spacex_msg
+bind pub - !spacex spacex_pub
+
 bind msg - !qcode qcode_msg
 bind pub - !qcode qcode_pub
 bind msg - !q qcode_msg
@@ -115,6 +123,7 @@ bind pub - !q qcode_pub
 
 set qrzbin "/home/eggdrop/bin/qrz"
 set gridbin "/home/eggdrop/bin/grid"
+set tzbin "/home/eggdrop/bin/timezone"
 set bandsbin "/home/eggdrop/bin/bands"
 set xraybin "/home/eggdrop/bin/xray"
 set forecastbin "/home/eggdrop/bin/solarforecast"
@@ -133,6 +142,7 @@ set mufbin "/home/eggdrop/bin/muf"
 set muf2bin "/home/eggdrop/bin/muf2"
 set astrobin "/home/eggdrop/bin/astro"
 set satbin "/home/eggdrop/bin/sat"
+set spacexbin "/home/eggdrop/bin/spacex"
 set qcodebin "/home/eggdrop/bin/qcode"
 
 set spotfile spotlist
@@ -296,6 +306,45 @@ proc msg_grid {nick uhand handle input} {
 		catch {exec ${gridbin} ${grid}} data
 	} else {
 		catch {exec ${gridbin} ${grid} --geo $geo } data
+	}
+
+	set output [split $data "\n"]
+	foreach line $output {
+		putmsg $nick [encoding convertto utf-8 "$line"]
+	}
+}
+
+proc timezone { nick host hand chan text } {
+	global tzbin
+	set timezone [sanitize_string [string trim ${text}]]
+	set geo [qrz_getgeo $hand]
+
+	putlog "timezone pub: $nick $host $hand $chan $timezone $geo"
+
+	if [string equal "" $geo] then {
+		catch {exec ${tzbin} ${timezone}} data
+	} else {
+		catch {exec ${tzbin} ${timezone} --geo $geo } data
+	}
+
+	set output [split $data "\n"]
+	foreach line $output {
+		putchan $chan [encoding convertto utf-8 "$line"]
+	}
+}
+
+
+proc msg_timezone {nick uhand handle input} {
+	global tzbin
+	set timezone [sanitize_string [string trim ${input}]]
+	set geo [qrz_getgeo $handle]
+
+	putlog "timezone msg: $nick $uhand $handle $timezone $geo"
+
+	if [string equal "" $geo] then {
+		catch {exec ${tzbin} ${timezone}} data
+	} else {
+		catch {exec ${tzbin} ${timezone} --geo $geo } data
 	}
 
 	set output [split $data "\n"]
@@ -887,7 +936,7 @@ proc unmorse_pub { nick host hand chan text } {
 	catch {exec ${unmorsebin} ${msg}} data
 	set output [split $data "\n"]
 	foreach line $output {
-		putchan $chan "$line"
+		putchan $chan [encoding convertto utf-8 "$line"]
 	}
 }
 proc unmorse_msg {nick uhand handle input} {
@@ -897,7 +946,7 @@ proc unmorse_msg {nick uhand handle input} {
 	catch {exec ${unmorsebin} ${msg}} data
 	set output [split $data "\n"]
 	foreach line $output {
-		putmsg $nick "$line"
+		putmsg $nick [encoding convertto utf-8 "$line"]
 	}
 }
 
@@ -1121,7 +1170,12 @@ proc sat_pub { nick host hand chan text } {
 	}
 	set output [split $data "\n"]
 	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+		# list via msg
+		if [string equal "list" $params] then {
+			putmsg $nick [encoding convertto utf-8 "$line"]
+		} else {
+			putchan $chan [encoding convertto utf-8 "$line"]
+		}
 	}
 }
 proc sat_msg {nick uhand handle input} {
@@ -1134,6 +1188,25 @@ proc sat_msg {nick uhand handle input} {
 	} else {
 		catch {exec ${satbin} ${params} ${geo}} data
 	}
+	set output [split $data "\n"]
+	foreach line $output {
+		putmsg $nick [encoding convertto utf-8 "$line"]
+	}
+}
+
+proc spacex_pub { nick host hand chan text } {
+	global spacexbin
+	putlog "spacex pub: $nick $host $hand $chan $text"
+	catch {exec ${spacexbin}} data
+	set output [split $data "\n"]
+	foreach line $output {
+		putchan $chan [encoding convertto utf-8 "$line"]
+	}
+}
+proc spacex_msg {nick uhand handle input} {
+	global spacexbin
+	putlog "spacex msg: $nick $uhand $handle $input"
+	catch {exec ${spacexbin}} data
 	set output [split $data "\n"]
 	foreach line $output {
 		putmsg $nick [encoding convertto utf-8 "$line"]

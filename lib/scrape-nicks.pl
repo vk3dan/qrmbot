@@ -14,7 +14,7 @@ binmode(STDOUT, ":utf8");
 use Cwd 'realpath';
 use File::Basename;
 
-my @subreddits = ("hamradio", "amateurradio");
+my @subreddits = ("amateurradio", "hamradio", "rtlsdr");
 
 #my $useragent = "Mozilla/5.0 (X11; Linux x86_64; rv:52.0) Gecko/20100101 Firefox/52.0";
 my $useragent = "foo";
@@ -29,8 +29,11 @@ foreach my $subreddit (@subreddits) {
 #  push @baseurls, "https://www.reddit.com/r/${subreddit}/gilded/.json";
 #  push @baseurls, "https://www.reddit.com/r/${subreddit}/controversial/.json";
 }
+#push @baseurls, "https://www.reddit.com/r/amateurradio/comments/8i4ayo/your_week_in_amateur_radio_new_licensees_05092018/dyostpt/.json";
 #push @baseurls, "https://www.reddit.com/user/molo1134/m/hamradiomulti/new/.json";
 #push @baseurls, "https://www.reddit.com/user/molo1134/m/hamradiomulti/comments/.json";
+#push @baseurls, "https://www.reddit.com/r/amateurradio/comments/8fowrk/is_there_a_baofenglike_radio_but_for_hf/dy6fl6s/.json";
+#push @baseurls, "https://www.reddit.com/r/amateurradio/comments/8fd9vb/its_not_much_but_its_mine_shack_edition/dy6mkg7/.json";
 
 our %nicks;
 our %results;
@@ -55,7 +58,10 @@ our @blacklist = (
   "SG92I", "SH0NUFF", "SK00MA", "SK4P", "SL3RM", "SP00NIX", "ST33P", "T0PSKI",
   "T1PHIL", "T3H", "T90FAN", "TH4AB", "TS830S", "TV8TONY", "UP2LATE", "V1CTOR",
   "V3KI", "V3NGI", "V4LSYL", "V8FTW", "VT2NC", "W00TAH", "W0153R", "W33DAR",
-  "X4B", "XG33KX", "Y2KAI", "Z33RO", "Z3MATT", "Z3US", "ZE1DA");
+  "X4B", "XG33KX", "Y2KAI", "Z33RO", "Z3MATT", "Z3US", "ZE1DA",
+  "JH23DF", "K67FDE", "N546RV", "N983CC", "W09U", "CN85PQ", "CN85PL", "BG4LAW",
+  "U03BB", "UD83D", "A1LOU", "FN03DR", "A80J", "KZ4I", "KZ4IX", "J0MPZ",
+  "WH33T", "KO26BX", "B17X", "HO0BER", "JP82QK", "JO41WX");
 
 # load nicks
 our $nickfile = "$ENV{'HOME'}/.nicks.csv";
@@ -94,7 +100,7 @@ foreach my $baseurl (@baseurls) {
     while(<HTTP>) {
     #  print STDERR "$_\n";
       $_ =~ s/{/{\n/g;
-      $_ =~ s/", "/"\n"/g;
+      $_ =~ s/["\]],\s+"/"\n"/g;
       $_ =~ s/(\d|true|false|null), /$1\n/g;
       @_ = split "\n";
       foreach my $e (@_) {
@@ -108,24 +114,49 @@ foreach my $baseurl (@baseurls) {
 	    $after = $v;
 	  } elsif ($k eq "author") {
 	    $u = $v;
-	    if ($u =~ /^\d?[a-z]{1,2}[0-9Øø]{1,4}[a-z]{1,4}$/i) {
+	    if ($u =~ /^\d?[a-z]{1,2}[0-9Øø∅]{1,4}[a-z]{1,4}$/i) {
 	      # username is callsign
 	      $c = uc $u;
-	      #print "inserting: $c $u\n";
-	      $results{$c} = $u;
+	      $c =~ s/[Øø∅]/0/g;
 	    }
 	  } elsif ($k eq "author_flair_text") {
 	    $f = $v;
-	    ($c, undef) = split(" ", $f);
-	    next if $c =~ /^[A-R]{2}[0-9]{2}([a-x]{2})?$/; # grid
-	    if ($c =~ /^\d?[a-z]{1,2}[0-9Øø]{1,4}[a-z]{1,4}$/i) {
-	      #print "inserting: $c $u\n";
-	      $c = uc $c;
-	      $results{$c} = $u;
+	    next if $f eq "null";
+	    ($c, undef) = grep {$_ ne ''} split(/[\s\W]/, $f);
+	    next if not defined $c;
+	    #print "$c\n";
+	    if ($c =~ /^[A-R]{2}[0-9]{2}([a-x]{2})?$/) { # grid
+	      $c = undef;
+	      next;
 	    }
+	    if ($c =~ /^\d?[a-z]{1,2}[0-9Øø∅]{1,4}[a-z]{1,4}$/i) {
+	      $c = uc $c;
+	      $c =~ s/[Øø∅]/0/g;
+	    } else {
+	      $c = undef;
+	    }
+	  } elsif ($k eq "kind") {
+	    # moving on to new entry
+	    if (defined $c and defined $u) {
+	      if (not any { /^$c$/i } @blacklist) {
+		print STDERR "found: $c /u/$u\n";
+		$results{$c} = $u;
+	      }
+	    }
+	    $u = undef;
+	    $c = undef;
 	  }
 	}
       }
+      if (defined($u) and defined($c)) {
+	if (not any { /^$c$/i } @blacklist) {
+	  print STDERR "found: $c /u/$u\n";
+	  $results{$c} = $u;
+	}
+      }
+      $u = undef;
+      $c = undef;
+
     }
     close(HTTP);
 
@@ -144,7 +175,10 @@ sub updatenicks {
 
   foreach my $k (keys %results) {
     next if $k eq "";
-    next if any { /^$k$/i } @blacklist;
+    if (any { /^$k$/i } @blacklist) {
+      delete $nicks{$k};
+      next;
+    }
 
     if (defined $nicks{$k}) {
       my ($call, $ircnick, undef) = split (/,/, $nicks{$k});
