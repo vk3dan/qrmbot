@@ -7,7 +7,7 @@
 package Location;
 require Exporter;
 @ISA = qw(Exporter);
-@EXPORT = qw(argToCoords qthToCoords coordToGrid geolocate gridToCoord distBearing coordToTZ decodeEntities);
+@EXPORT = qw(argToCoords qthToCoords coordToGrid geolocate gridToCoord distBearing coordToTZ getGeocodingAPIKey coordToElev azToNEWS);
 
 use utf8;
 use Math::Trig;
@@ -20,7 +20,7 @@ sub getGeocodingAPIKey {
   if (-e ($apikeyfile)) {
     require($apikeyfile);
   } else {
-    die "error: unable to read file $apikeyfile";
+    print "error: unable to read file $apikeyfile\n";
   }
   return $geocodingapikey;
 }
@@ -96,7 +96,9 @@ sub qthToCoords {
   my $apikey = getGeocodingAPIKey();
   my $url = "https://maps.googleapis.com/maps/api/geocode/xml?address=$place&sensor=false&key=$apikey";
 
-  open (HTTP, '-|', "curl -k -s '$url'");
+  return undef if not defined $apikey;
+
+  open (HTTP, '-|', "curl --stderr - -N -k -s -L '$url'");
   binmode(HTTP, ":utf8");
   GET: while (<HTTP>) {
     #print;
@@ -130,6 +132,7 @@ sub geolocate {
   my $lat = shift;
   my $lon = shift;
   my $apikey = getGeocodingAPIKey();
+  return undef if not defined $apikey;
 
   my $url = "https://maps.googleapis.com/maps/api/geocode/xml?latlng=$lat,$lon&sensor=false&key=$apikey";
 
@@ -143,7 +146,7 @@ sub geolocate {
 
   RESTART:
 
-  open (HTTP, '-|', "curl -k -s '$url'");
+  open (HTTP, '-|', "curl --stderr - -N -k -s -L '$url'");
   binmode(HTTP, ":utf8");
   while (<HTTP>) {
     #print;
@@ -283,13 +286,14 @@ sub coordToTZ {
   my $lat = shift;
   my $lon = shift;
   my $apikey = getGeocodingAPIKey();
+  return undef if not defined $apikey;
 
   my $now = time();
-  my $url = "https://maps.googleapis.com/maps/api/timezone/json?location=$lat,$lon&timestamp=$now";
+  my $url = "https://maps.googleapis.com/maps/api/timezone/json?location=$lat,$lon&timestamp=$now&key=$apikey";
 
   my ($dstoffset, $rawoffset, $zoneid, $zonename);
 
-  open (HTTP, '-|', "curl -k -s '$url'");
+  open (HTTP, '-|', "curl --stderr - -N -k -s -L '$url'");
   binmode(HTTP, ":utf8");
   while (<HTTP>) {
 
@@ -319,109 +323,67 @@ sub coordToTZ {
   return $zoneid;
 }
 
-sub decodeEntities {
-  my $s = shift;
-  $s =~ s/&#(\d+);/chr($1)/eg;
-  $s =~ s/&#x([0-9a-f]+);/chr(hex($1))/egi;
+sub coordToElev {
+  my $lat = shift;
+  my $lon = shift;
+  my $apikey = getGeocodingAPIKey();
+  return undef if not defined $apikey;
 
-  $s =~ s/&reg;/®/g;
-  $s =~ s/&copy;/©/g;
-  $s =~ s/&trade;/™/g;
-  $s =~ s/&cent;/¢/g;
-  $s =~ s/&pound;/£/g;
-  $s =~ s/&yen;/¥/g;
-  $s =~ s/&euro;/€/g;
-  $s =~ s/&laquo;/«/g;
-  $s =~ s/&raquo;/»/g;
-  $s =~ s/&bull;/•/g;
-  $s =~ s/&dagger;/†/g;
-  $s =~ s/&deg;/°/g;
-  $s =~ s/&permil;/‰/g;
-  $s =~ s/&micro;/µ/g;
-  $s =~ s/&middot;/·/g;
-  $s =~ s/&rsquo;/’/g;
-  $s =~ s/&lsquo;/‘/g;
-  $s =~ s/&ldquo;/“/g;
-  $s =~ s/&rdquo;/”/g;
-  $s =~ s/&ndash;/–/g;
-  $s =~ s/&mdash;/—/g;
+  my $url = "https://maps.googleapis.com/maps/api/elevation/json?locations=$lat,$lon&key=$apikey";
 
-  $s =~ s/&aacute;/á/g;
-  $s =~ s/&Aacute;/Á/g;
-  $s =~ s/&acirc;/â/g;
-  $s =~ s/&Acirc;/Â/g;
-  $s =~ s/&aelig;/æ/g;
-  $s =~ s/&AElig;/Æ/g;
-  $s =~ s/&agrave;/à/g;
-  $s =~ s/&Agrave;/À/g;
-  $s =~ s/&aring;/å/g;
-  $s =~ s/&Aring;/Å/g;
-  $s =~ s/&atilde;/ã/g;
-  $s =~ s/&Atilde;/Ã/g;
-  $s =~ s/&auml;/ä/g;
-  $s =~ s/&Auml;/Ä/g;
-  $s =~ s/&ccedil;/ç/g;
-  $s =~ s/&Ccedil;/Ç/g;
-  $s =~ s/&eacute;/é/g;
-  $s =~ s/&Eacute;/É/g;
-  $s =~ s/&ecirc;/ê/g;
-  $s =~ s/&Ecirc;/Ê/g;
-  $s =~ s/&egrave;/è/g;
-  $s =~ s/&Egrave;/È/g;
-  $s =~ s/&eth;/ð/g;
-  $s =~ s/&ETH;/Ð/g;
-  $s =~ s/&euml;/ë/g;
-  $s =~ s/&Euml;/Ë/g;
-  $s =~ s/&iacute;/í/g;
-  $s =~ s/&Iacute;/Í/g;
-  $s =~ s/&icirc;/î/g;
-  $s =~ s/&Icirc;/Î/g;
-  $s =~ s/&iexcl;/¡/g;
-  $s =~ s/&igrave;/ì/g;
-  $s =~ s/&Igrave;/Ì/g;
-  $s =~ s/&iquest;/¿/g;
-  $s =~ s/&iuml;/ï/g;
-  $s =~ s/&Iuml;/Ï/g;
-  $s =~ s/&ntilde;/ñ/g;
-  $s =~ s/&Ntilde;/Ñ/g;
-  $s =~ s/&oacute;/ó/g;
-  $s =~ s/&Oacute;/Ó/g;
-  $s =~ s/&ocirc;/ô/g;
-  $s =~ s/&Ocirc;/Ô/g;
-  $s =~ s/&oelig;/œ/g;
-  $s =~ s/&OElig;/Œ/g;
-  $s =~ s/&ograve;/ò/g;
-  $s =~ s/&Ograve;/Ò/g;
-  $s =~ s/&ordf;/ª/g;
-  $s =~ s/&ordm;/º/g;
-  $s =~ s/&oslash;/ø/g;
-  $s =~ s/&Oslash;/Ø/g;
-  $s =~ s/&otilde;/õ/g;
-  $s =~ s/&Otilde;/Õ/g;
-  $s =~ s/&ouml;/ö/g;
-  $s =~ s/&Ouml;/Ö/g;
-  $s =~ s/&szlig;/ß/g;
-  $s =~ s/&thorn;/þ/g;
-  $s =~ s/&THORN;/Þ/g;
-  $s =~ s/&uacute;/ú/g;
-  $s =~ s/&Uacute;/Ú/g;
-  $s =~ s/&ucirc;/û/g;
-  $s =~ s/&Ucirc;/Û/g;
-  $s =~ s/&ugrave;/ù/g;
-  $s =~ s/&Ugrave;/Ù/g;
-  $s =~ s/&uml;/ö/g;
-  $s =~ s/&uuml;/ü/g;
-  $s =~ s/&Uuml;/Ü/g;
-  $s =~ s/&yacute;/ý/g;
-  $s =~ s/&Yacute;/Ý/g;
-  $s =~ s/&yuml;/ÿ/g;
+  my ($elev, $res);
+  open (HTTP, '-|', "curl --stderr - -N -k -s -L '$url'");
+  binmode(HTTP, ":utf8");
+  while (<HTTP>) {
+    # {
+    #    "results" : [
+    #       {
+    #          "elevation" : 1608.637939453125,
+    #          "location" : {
+    #             "lat" : 39.73915360,
+    #             "lng" : -104.98470340
+    #          },
+    #          "resolution" : 4.771975994110107
+    #       }
+    #    ],
+    #    "status" : "OK"
+    # }
+    if (/"(\w+)" : (-?\d+(\.\d+)?|"[^"]*")/) {
+      my ($k, $v) = ($1, $2);
+      $v =~ s/^"(.*)"$/$1/;
+      #print "$k ==> $v\n";
+      if ($k eq "status" and $v ne "OK") {
+	return undef;
+      }
+      $elev = $v if $k eq "elevation";
+      $res = $v if $k eq "resolution";
+    }
+  }
+  close(HTTP);
 
-  $s =~ s/&lt;/</g;
-  $s =~ s/&gt;/>/g;
-  $s =~ s/&quot;/"/g;
-  $s =~ s/&apos;/'/g;
-  $s =~ s/&nbsp;/ /g;
-  $s =~ s/&amp;/\&/g;
-
-  return $s;
+  return $elev;
 }
+
+sub azToNEWS {
+  my $az = shift;
+  return undef if not defined $az;
+  return "N"   if $az >= 0.0 and $az < 11.25;
+  return "NNE" if $az < 33.75;
+  return "NE"  if $az < 56.25;
+  return "ENE" if $az < 78.75;
+  return "E"   if $az < 101.25;
+  return "ESE" if $az < 123.75;
+  return "SE"  if $az < 146.25;
+  return "SSE" if $az < 168.75;
+  return "S"   if $az < 191.25;
+  return "SSW" if $az < 213.75;
+  return "SW"  if $az < 236.25;
+  return "WSW" if $az < 258.75;
+  return "W"   if $az < 281.25;
+  return "WNW" if $az < 303.75;
+  return "NW"  if $az < 326.25;
+  return "NNW" if $az < 348.75;
+  return "N"   if $az <= 360.0;
+  return undef;
+}
+

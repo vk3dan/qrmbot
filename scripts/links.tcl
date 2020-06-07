@@ -27,12 +27,18 @@
 # measure.
 source scripts/isregistered.tcl
 
-bind msgm - *http://* http_msg
-bind pubm - *http://* http_pub
-bind msgm - *https://* http_msg
-bind pubm - *https://* http_pub
+bind msgm - *://* http_msg
+bind pubm - *://* http_pub
+#bind msgm - *http://* http_msg
+#bind pubm - *http://* http_pub
+#bind msgm - *https://* http_msg
+#bind pubm - *https://* http_pub
+
+bind pub - !github github
+bind msg - !github msg_github
 
 set linkbin "/home/eggdrop/bin/linksummary"
+set githublink "https://github.com/molo1134/qrmbot/"
 
 proc http_msg { nick host hand text } {
 	global linkbin
@@ -42,11 +48,12 @@ proc http_msg { nick host hand text } {
 
 	set params [sanitize_url [string trim ${text}]]
 	putlog "http msg: $nick $host $hand $params"
-	catch {exec ${linkbin} ${params}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	set fd [open "|${linkbin} ${params}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 # TODO FIXME XXX: add a blacklist of users that we don't process.
@@ -64,9 +71,21 @@ proc http_pub { nick host hand chan text } {
 
 	set params [sanitize_url [string trim ${text}]]
 	putlog "http pub: $nick $host $hand $chan $params"
-	catch {exec ${linkbin} ${params}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	set fd [open "|${linkbin} ${params}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
+}
+
+proc github { nick host hand chan text } {
+	global githublink
+	putlog "github pub: $nick $host $hand $chan"
+	putchan $chan "$githublink"
+}
+proc msg_github { nick uhand handle input } {
+	global githublink
+	putlog "github msg: $nick $uhand $handle"
+	putmsg $nick "$githublink"
 }

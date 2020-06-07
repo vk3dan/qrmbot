@@ -1,0 +1,53 @@
+#!/usr/bin/perl
+use strict;
+use DateTime;
+use POSIX;
+
+use File::Basename;
+use Cwd 'realpath';
+use lib dirname(realpath(__FILE__));
+use Util;
+
+my $d1 = DateTime->now;
+my ($curryear, $currmon, $currdate) = split / /, strftime("%Y %m %d", gmtime($d1->epoch()));
+my ($thxyear, $thxmon, $thxdate) = split / /, getIterDayInMonth(4, "Thursday", "Nov");	# 4th Thursday in Nov
+#print "$curryear, $currmon, $currdate\n";
+#print "$thxyear, $thxmon, $thxdate\n";
+
+if (($currmon > 1 or ($currmon == 1 and $currdate > 6))
+    and ($thxmon > $currmon or ($thxmon == $currmon and $thxdate > $currdate))) {
+  print "It's not even Thanksgiving yet!\n";
+  exit 0;
+}
+
+my $xmasyear = $curryear;
+$xmasyear-- if $currmon == 1 and $currdate < 7;
+
+my $d2 = DateTime->new(
+    year       => $xmasyear,
+    month      => 12,
+    day        => 24,
+    hour       => 23,
+    minute     => 59,
+    second     => 59,
+);
+
+my $dur = $d2->epoch() - $d1->epoch();
+
+if ($dur < 0) {
+	print "Merry Christmas everyone! https://media.giphy.com/media/gNke2UrUTopOg/giphy.gif\n";
+	exit 0;
+}
+
+my $m = floor($dur / (30 * 24 * 60 * 60));
+my $d = floor($dur % (30 * 24 * 60 * 60) / (24 * 60 * 60));
+my $h = floor($dur % (24 * 60 * 60) / (60 * 60));
+my $min = ($dur / 60) % 60;
+my $sec = $dur % 60;
+
+print "Christmas countdown! ";
+print "$m month, " if $m == 1;
+print "$m months, " if $m > 1;
+print "$d day, " if $d == 1;
+print "$d days, " if $d > 1;
+print "$h hours, $min min, $sec sec\n";

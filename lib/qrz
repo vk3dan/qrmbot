@@ -18,6 +18,7 @@ use Encode qw(decode);
 use I18N::Langinfo qw(langinfo CODESET);
 use URI::Escape;
 use POSIX qw(strftime);
+use MIME::Base64;
 
 use Cwd 'realpath';
 use File::Basename;
@@ -57,15 +58,22 @@ our $skipCA = 1;
 
 our $login_callsign = undef;
 our $login_password = undef;
-my $loginfile = $ENV{'HOME'} . "/.qrzlogin";
-my $cookiefile = $ENV{'HOME'} . "/.qrzcookies";
+my $loginfile = undef;
+my $cookiefile = undef;
+if (exists $ENV{'HOME'}) {
+  $loginfile = $ENV{'HOME'} . "/.qrzlogin";
+  $cookiefile = $ENV{'HOME'} . "/.qrzcookies";
+} else {
+  $loginfile = "./.qrzlogin";
+  $cookiefile = "/tmp/.qrzcookies";
+}
 my $baseurl = "https://www.qrz.com";
 
 if (-e ($loginfile)) {
   chmod 0600, $loginfile;
   require($loginfile);
 } else {
-  die "error: unable to read file \$HOME/.qrzlogin"
+  die "error: unable to read file $loginfile"
 }
 
 if ($#ARGV < 0 || length($ARGV[0]) == 0) {
@@ -82,7 +90,9 @@ my $type = undef;
 my $i = 0;
 my $compact = 0;
 my $csv = 0;
+my $xml = 0;
 my $doCount = 0;
+my $dod = undef;
 
 while ($i <= $#ARGV) {
   if ($ARGV[$i] =~ /--geo/) {
@@ -94,6 +104,11 @@ while ($i <= $#ARGV) {
     $i += 2;
     next;
   }
+  if ($ARGV[$i] =~ /--sk/) {
+    $dod = $ARGV[$i+1];
+    $i += 2;
+    next;
+  }
   if ($ARGV[$i] =~ /--compact/) {
     $compact = 1;
     $i++;
@@ -101,6 +116,11 @@ while ($i <= $#ARGV) {
   }
   if ($ARGV[$i] =~ /--csv/) {
     $csv = 1;
+    $i++;
+    next;
+  }
+  if ($ARGV[$i] =~ /--xml/) {
+    $xml = 1;
     $i++;
     next;
   }
@@ -126,12 +146,28 @@ die "no callsign." unless defined $call;
 if ($call =~ /^(grid:)? ?([A-R]{2}[0-9]{2}([a-x]{2})?$)/i) {
   $call = $2;
   $type = "grid";
-} elsif ($call =~ /^\s*(\d?[a-z]{1,2}[0-9Øø]{1,4}[a-z]{1,4})\s*$/i) {
+} elsif ($call =~ /^\s*(([a-z0-9]+\/)?\d?[a-z]{1,2}[0-9Øø]{1,4}[a-z]+(\/[a-z0-9]+)?)\s*$/i) {
   $call = $1;
   $type = "callsign";
 } elsif ($call =~ /^\s*([a-z0-9]*\*[a-z0-9]*)\s*$/i) {	# wildcards
   $call = $1;
   $type = "callsign";
+} elsif ($call =~ /^\s*([a-z0-9?]*\?[a-z0-9?]*)\s*$/i) {	# wildcards
+  $call = $1;
+  $type = "callsign";
+} elsif ($call =~ /^dmr:([0-9]+)$/i) {
+  my $dmr = $1;
+  updateDMRfiles();
+  my $results = findCallForDmr($dmr);
+  if ($results =~ /,/) {
+    foreach my $e (split(/,/, $results)) {
+      print "$e\n";
+    }
+    exit 0;
+  } else {
+    $call = $results;
+    $type = "callsign";
+  }
 } elsif ($call =~ m|^/u/|i ) {
   my $r = getCallForRedditId($call);
   if (! defined($r)) {
@@ -170,7 +206,7 @@ if (defined($useragent)) {
     die "unknown http tool: $httptool";
   }
 }
- 
+
 our $httptool_base = undef;
 our $httptool_savecookies = undef;
 our $httptool_loadcookies = undef;
@@ -184,7 +220,7 @@ if ($httptool eq "wget") {
   $httptool_postdata = "--post-data";
   $httptool_timeout = "--timeout=";
 } elsif ($httptool eq "curl") {
-  $httptool_base = "curl -s $useragentoption";
+  $httptool_base = "curl -L -s $useragentoption";
   $httptool_base .= " --insecure" if $skipCA == 1;
   $httptool_savecookies = "--cookie-jar $cookiefile";
   $httptool_loadcookies = "--cookie $cookiefile";
@@ -193,13 +229,13 @@ if ($httptool eq "wget") {
 } else {
   die "unknown http tool: $httptool";
 }
- 
+
 if (!-e $cookiefile) {
   #print "no cookie file -- doing login.\n";
   doLogin();
 }
 
-updateDMRfiles();
+updateDMRfiles() unless $xml == 1;
 
 # note: this code depends on the netscape cookie format (used by wget and curl)
 my $needlogin = 0;
@@ -219,16 +255,17 @@ if ($needlogin) {
 }
 
 our ($retcall, $country, $name, $sk, $class, $mail, $grid, $lat, $lon, $geosrc,
-			$born, @prevcalls, $email, $codes, $website, $iota, $lotw, $eqsl,
-			$mailqsl, $qsl, $expiration, @othercalls, $trustee, $incomplete);
+  $born, @prevcalls, $email, $codes, $website, $iota, $lotw, $eqsl,
+  $mailqsl, $qsl, $expiration, @othercalls, $trustee, $incomplete, $addr1,
+  $addr2, $state, $zip, $mailcountry, $county, $ituzone, $cqzone, $qrzserial,
+  $qrzadmin, $effective, $dxcc, $subscriber, $twofa);
 
 getAndParseData();
 
 my ($redditid, $ircnick) = getUserInfo($retcall);
 
 our ($vanity, $individual, $club, $military, $races, $primarypref, $clubpref,
-			$formerprimary, $closerelative, $formerclub, $clubwithconsent,
-			$codetext);
+  $formerprimary, $closerelative, $formerclub, $clubwithconsent, $codetext);
 
 if (defined($codes)) {
   parsecodes();
@@ -255,6 +292,15 @@ if (!defined($name)) {
   $name="no name on file";
 }
 
+if (defined($dod)) {
+  print "Subject: Deceased amateur license cancellation request - $retcall\n";
+  print "Please cancel the Amateur Radio license of $retcall, $name, who died on $dod. A copy of the <obiturary|Social Security Death Index report> is attached, showing the date of death.  Thank you.\n";
+  print "FCC System: ULS\n";
+  print "Radio Service: HA - Amateur\n";
+  print "------\n";
+  exit 0;
+}
+
 if ($csv == 1) {
   $name =~ s/,//g;
   $mail =~ s/,//g;
@@ -267,10 +313,93 @@ if ($csv == 1) {
   exit 0;
 }
 
+if ($xml == 1) {
+  #print("<?xml version=\"1.0\" ?>\n");
+  #print("<QRZDatabase version=\"1.33\">\n");
+  print("  <Callsign>\n");
+
+  print("    <call>$retcall</call>\n");
+  print("    <xref>",uc($call),"</xref>\n") if uc($retcall) ne uc($call);
+  print("    <aliases>".join(",", @othercalls)."</aliases>\n") if @othercalls;
+  print("    <dxcc>$dxcc</dxcc>\n") if defined $dxcc;
+
+  my $lname = $name;
+  $lname =~ s/\s*$//;
+  $lname =~ s/^.*\s+//;
+  my $fname = $name;
+  $fname =~ s/^\s*//;
+  $fname =~ s/\s+.*$//;
+
+  print("    <fname>$fname</fname>\n");
+  print("    <name>$lname</name>\n");
+  print("    <addr1>$addr1</addr1>\n");
+  print("    <addr2>$addr2</addr2>\n");
+  print("    <state>$state</state>\n") if defined $state;
+  print("    <zip>$zip</zip>\n") if defined $zip;
+  print("    <country>$mailcountry</country>\n") if defined $mailcountry; #country name for mailing addr
+  # TODO: ccode -- dxcc entity code for mailing address country
+  print("    <lat>$lat</lat>\n") if defined $lat;
+  print("    <lon>$lon</lon>\n") if defined $lon;
+  print("    <grid>$grid</grid>\n") if defined($grid);
+  print("    <county>$county</county>\n") if defined($county);
+  # FIXME: fips (USA) -- requires an external lookup -- not on page
+  print("    <land>$country</land>\n"); # dxcc country name
+  print("    <efdate>$effective</efdate>\n") if defined($effective); # (USA)
+  print("    <expdate>$expiration</expdate>\n") if defined($expiration); # (USA)
+  print("    <p_call>$prevcalls[0]</p_call>\n") if defined($prevcalls[0]);
+  print("    <class>$class</class>\n") if defined($class);
+  print("    <codes>$codes</codes>\n") if defined($codes); # license type codes (USA)
+  print("    <qslmgr>$qsl</qslmgr>\n") if defined($qsl);
+  print("    <email>$email</email>\n") if defined($email);
+  # FIXME: url -- no longer on page
+  # TODO: views count
+  # TODO: bio -- length of bio in bytes
+  # TODO: biodate -- date of last bio update
+  # TODO: image
+  # TODO: imageinfo -- height:width:size in bytes of image
+  print("    <serial>$qrzserial</serial>\n") if defined($qrzserial);
+  # TODO: moddate -- qrz callsign last modified date
+  # TODO: MSA -- metro service area (USPS)
+  # TODO: areacode -- phone area code (USA)
+  # TODO: timezone -- USA
+  # TODO: GMT offset
+  # TODO: DST
+
+  my $eqslbool = "0";
+  $eqslbool = "1" if defined($eqsl) and $eqsl =~ /Yes/i;
+  print("    <eqsl>$eqslbool</eqsl>\n");
+  my $mqslbool = "0";
+  $mqslbool = "1" if defined($mailqsl) and $mailqsl =~ /Yes/i;
+  print("    <mqsl>$mqslbool</mqsl>\n");
+  my $lotwbool = "0";
+  $lotwbool = "1" if defined($lotw) and $lotw =~ /Yes/i;
+  print("    <lotw>$lotwbool</lotw>\n");
+
+  print("    <cqzone>$cqzone</cqzone>\n") if defined $cqzone;
+  print("    <ituzone>$ituzone</ituzone>\n") if defined $ituzone;
+  print("    <geoloc>$geosrc</geoloc>\n") if defined $geosrc;
+  print("    <born>$born</born>\n") if defined($born);
+  print("    <user>$qrzadmin</user>\n") if defined($qrzadmin); # QRZ user who manages this record
+  print("    <iota>$iota</iota>\n") if defined($iota);
+  print("  </Callsign>\n");
+#  print("</QRZDatabase>\n");
+  exit 0;
+}
+
 my $dmrIds = getDMRidsForCall($retcall);
 $dmrIds =~ s/,/, /g if defined $dmrIds;
 
+$subscriber = 0 if not defined $subscriber;
+$twofa = 0 if not defined $twofa;
+
 print bold($retcall), ": $country: $name";
+print green("✔") if $twofa == 1;
+print darkRed(" (★)") if $subscriber == 1;
+print cyan(" (★)") if $subscriber == 2;
+print lightGrey(" (★)") if $subscriber == 3;
+print yellow(" ("), cyan("★"), yellow(")") if $subscriber == 4;
+print red(" (★)") if $subscriber == 6;
+print red(" ("), yellow("★"), red(")") if $subscriber == 7;
 if (defined($expiration) && ($expiration lt strftime("%Y-%m-%d", gmtime))) {
   print " ", bold("\[EXPIRED\]");
 }
@@ -295,12 +424,17 @@ if (defined($iota)) {
 if (defined($codes) && $compact ne 1) {
   print " -- codes: $codes $codetext";
 }
+if (defined($vanity) and $vanity eq 1 and $compact eq 1) {
+  print " -- (vanity)";
+}
 if (@prevcalls) {
   my @uniqprevcalls = uniq(@prevcalls);
   print " -- prev " . join(", ", @uniqprevcalls);
 }
 if (@othercalls) {
-  print " -- aliases: " . join(", ", @othercalls);
+  my @uniqothercalls = uniq(@othercalls);
+  # TODO: remove calls from @uniqprevcalls from this list
+  print " -- aliases: " . join(", ", @uniqothercalls);
 }
 if (defined($dmrIds) and length($dmrIds) > 0) {
   print " -- DMR IDs: $dmrIds";
@@ -493,6 +627,7 @@ sub getAndParseData {
 	  $matchcall =~ s/^\*//g;
 	  $matchcall =~ s/\*$//g;
 	  $matchcall =~ s/\*/.*/g;
+	  $matchcall =~ s/\?/./g;
 	  $resultcall =~ s/($matchcall)/bold($1)/ige;
 	  $resultdetail = undef;
 	}
@@ -515,7 +650,7 @@ sub getAndParseData {
 	  }
 	}
       }
-      if ($matches >= $limit) {
+      if ($matches >= $limit or $count < $matches) {
 	print "truncated. $matches matches found. see $url\n";
       }
       exit $exitnonzeroonerror;
@@ -542,8 +677,12 @@ sub getAndParseData {
       exit $exitnonzeroonerror;
     }
 
-    if (/This call sign record has incomplete details/) {
-      $incomplete = 1;
+    if (/biodata.*Base64\.decode\("([^"]*)"/) {
+      my $biodata = decode_base64($1);
+      #print "$biodata\n";
+      if ($biodata =~ /This call sign record has incomplete details/) {
+	$incomplete = 1;
+      }
     }
 
     if (/begin calldata/) {
@@ -555,6 +694,9 @@ sub getAndParseData {
       exit $exitnonzeroonerror;
     }
 
+    if ($calldata and m|onclick="window.location='https://www\.qrz\.com/atlas\?dxcc=(\d+)'">|) {
+      $dxcc = $1;
+    }
     if ($calldata and /\/atlas.*<span style="position:relative;top[^>]*>([^<]*)</) {
       $country = $1;
       #next;
@@ -572,18 +714,34 @@ sub getAndParseData {
       getAndParseData();
       return;
     }
-    if (/<p style="color:black;font-weight:bold;">SILENT KEY/ or 
+    if (/<p style="color:black;font-weight:bold;">SILENT KEY/ or
 	/<span style="color:white">SILENT KEY/) {
 
       $sk = 1;
     }
     if (defined($retcall) and length($retcall) > 0 and $calldata and !defined($name) and /^<p class="m0">([^<]+)<span[^>]*>[^<]*<\/span><br *\/>(.*)$/) {
       $name = $1;
-      $mail = $2;
+      $addr1 = $addr2 = $mailcountry = $mail = $2;
       $mail =~ s/<br *\/>/; /g;
       $mail =~ s/<\/p>//g;
+      $addr1 =~ s/^([^<]*)<br *\/>.*$/$1/;
+      $addr2 =~ s/^[^<]*<br *\/>([^<]*)<br *\/>.*$/$1/;
+      if ($addr2 =~ m/(.*),\s+([A-Z]{2})\s+([0-9]{5})/) {
+	($addr2, $state, $zip) = ($1, $2, $3)
+      }
+      $mailcountry =~ s/^.*<br *\/>(.*?)<\/p>/$1/;
       next;
     }
+
+    $subscriber = 1 if />XML Subscriber</ or /title="XML Data Subscriber"/;
+    $subscriber = 2 if />Premium Subscriber</ or /title="Premium Subscriber"/;
+    $subscriber = 3 if />Platinum Subscriber</ or /title="Platinum Subscriber"/;
+    $subscriber = 4 if />QRZ Lifetime Member/ or /title="Lifetime/;
+    $subscriber = 6 if />Super Moderator/ or /title="QRZ Administrator"/;
+    $subscriber = 7 if /title="QRZ HQ Staff/;
+
+    $twofa = 1 if /href='\/identity-verification/ or /\/badges\/idv_112x24.png/;
+
     if (/<b>QSL:<\/b>\s*([^<]+)\s*</) {
       $qsl = $1;
     }
@@ -666,9 +824,33 @@ sub getAndParseData {
 	  $geosrc = $val;
 	}
       }
+      if ($key =~ /County/) {
+	$county = $val;
+	next;
+      }
+      if ($key =~ /ITU Zone/) {
+	$ituzone = $val;
+	next;
+      }
+      if ($key =~ /CQ Zone/) {
+	$cqzone = $val;
+	next;
+      }
+      if ($key =~ /Effective/) {
+	$effective = $val;
+	next;
+      }
       if ($key =~ /Expires/) {
 	#print "Expires: $val\n";
 	$expiration = $val;
+	next;
+      }
+      if ($key =~ /QRZ Record/) {
+	$qrzserial = $val;
+	next;
+      }
+      if ($key =~ /QRZ Admin/) {
+	$qrzadmin = $val;
 	next;
       }
       if ($key =~ /Class/) {
@@ -718,8 +900,15 @@ sub getAndParseData {
 	next;
       }
     }
-    if ($detail and 
-      /td class="ha"><a href="[^"]*">([A-Z0-9]+)<\/a><\/td><td class="hc">(.*)<\/td><\/tr>/) {
+    if ($detail and /td class="dh">See Also<\/td><td class="d[iw]">(.*)\s*<\/td><\/tr>/) {
+      foreach my $e (split(/ /, $1)) {
+	if ($e =~ />(.*)<\/a>/) {
+	  push @othercalls, $1;
+	}
+      }
+    }
+    if ($detail and
+      /td class="ha"><a href="[^"]*">([A-Z0-9\/]+)<\/a><\/td><td class="hc">(.*)<\/td><\/tr>/) {
 
       #print "$1: $2\n";
       my $alias = $1;
@@ -798,9 +987,8 @@ sub parsecodes {
 # This is completely optional.
 sub getUserInfo {
   my $call = shift;
-  if (! defined $call) {
-    return;
-  }
+  return if not defined $call;
+  return if not exists $ENV{'HOME'};
   my ($userid, $ircnick) = (undef, undef);
   my $nickfile = "$ENV{'HOME'}/.nicks.csv";
   if (! -e $nickfile) {
@@ -859,8 +1047,8 @@ sub updateDMRfiles {
   my $userFile="$ENV{HOME}/.dmr-id-users.csv";
   my $rptrFile="$ENV{HOME}/.dmr-id-repeaters.csv";
 
-  my $usersUrl="https://www.radioid.net/static/users.csv";
-  my $rptrsUrl="https://www.radioid.net/static/rptrs.csv";
+  my $usersUrl="https://www.radioid.net/static/cbridge_simple_user.csv";
+  my $rptrsUrl="https://www.radioid.net/static/cbridge_simple_rptr.csv";
 
   my $maxage=604800; # 1 week
   my $now = time();
@@ -878,6 +1066,8 @@ sub updateDMRfiles {
     $needUsers = 1
   }
 
+  $needUsers = 1 if defined $size and $size < 10000;
+
   (undef, undef, undef, undef, undef, undef, undef, $size, undef, $mtime, undef, undef, undef) = stat $rptrFile;
   if (defined $mtime) {
     my $age = $now - $mtime;
@@ -886,8 +1076,10 @@ sub updateDMRfiles {
     $needRptrs = 1
   }
 
-  system "curl -s -k -o $userFile '$usersUrl'" if $needUsers == 1;
-  system "curl -s -k -o $rptrFile '$rptrsUrl'" if $needRptrs == 1;
+  $needRptrs = 1 if defined $size and $size < 10000;
+
+  system "curl -s -k -L -o $userFile '$usersUrl'" if $needUsers == 1;
+  system "curl -s -k -L -o $rptrFile '$rptrsUrl'" if $needRptrs == 1;
 
   # FIXME: errors ignored.
 }
@@ -904,8 +1096,9 @@ sub getDMRidsForCall {
     open (USERFILE, "<", $userFile);
     while (<USERFILE>) {
       chomp;
-      my ($id, $filecall) = split /,/;
-      push @results, $id if uc($filecall) eq $call;
+      s/\s*$//;
+      my ($filecall, undef, undef, $id) = split /[,\s]/;
+      push @results, $id if defined $id and defined $filecall and uc($filecall) eq $call;
     }
     close(USERFILE);
   }
@@ -914,8 +1107,41 @@ sub getDMRidsForCall {
     open (RPTRFILE, "<", $rptrFile);
     while (<RPTRFILE>) {
       chomp;
-      my ($id, $filecall) = split /,/;
-      push @results, $id if uc($filecall) eq $call;
+      s/\s*$//;
+      my ($filecall, undef, undef, $id) = split /[,\s]/;
+      push @results, $id if defined $id and defined $filecall and uc($filecall) eq $call;
+    }
+    close(RPTRFILE);
+  }
+
+  return join(",", @results);
+}
+
+sub findCallForDmr {
+  my $dmr = shift;
+  my $userFile="$ENV{HOME}/.dmr-id-users.csv";
+  my $rptrFile="$ENV{HOME}/.dmr-id-repeaters.csv";
+
+  my @results;
+
+  if (-e $userFile) {
+    open (USERFILE, "<", $userFile);
+    while (<USERFILE>) {
+      chomp;
+      s/\s*$//;
+      my ($filecall, undef, undef, $id) = split /[,\s]/;
+      push @results, $filecall if defined $id and $id == $dmr;
+    }
+    close(USERFILE);
+  }
+
+  if (-e $rptrFile) {
+    open (RPTRFILE, "<", $rptrFile);
+    while (<RPTRFILE>) {
+      chomp;
+      s/\s*$//;
+      my ($filecall, undef, undef, $id) = split /[,\s]/;
+      push @results, $filecall if defined $id and $id == $dmr;
     }
     close(RPTRFILE);
   }

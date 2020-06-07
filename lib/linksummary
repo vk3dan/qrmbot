@@ -12,15 +12,19 @@ use File::Basename;
 use Cwd 'realpath';
 use lib dirname(realpath(__FILE__));
 use Colors;
-use Location;
+use Util;
 
 use URI::Escape;
 use Encode qw(/decode/);
+use Time::Local;
+use Time::Piece ();
+use List::Util qw[min max];
+use POSIX qw(strftime);
 
-our $bitly_apikey=undef;
-my $bitlykeyfile = $ENV{'HOME'} . "/.bitlyapikey";
-if (-e ($bitlykeyfile)) {
-  require($bitlykeyfile);
+our $imgur_key=undef;
+my $imgurfile = $ENV{'HOME'} . "/.imgurkey";
+if (-e ($imgurfile)) {
+  require($imgurfile);
 }
 
 my $timeout = 4;	# max 4 seconds
@@ -32,13 +36,24 @@ $highlight = "irc" if $username eq "eggdrop";
 
 # eggdrop doesn't split args on spaces
 @ARGV=split(' ', join(' ',@ARGV));
+@ARGV = uniq(@ARGV);	# deduplicate - no reason to process the same url twice
 
 my $i = 0;
 while ($i <= $#ARGV) {
 
   $ARGV[$i] =~ s/'//g; # sanitize
+  our $deamped = 0;
 
-  if ($ARGV[$i] =~ m|^https?://(www\.)?youtube\.com/watch\?v=([\w-]+)|i) {
+  if ($ARGV[$i] =~ m|^https?://[^/]*?/amp/|i) {
+    my $deamped = deamp($ARGV[$i]);
+    if (defined ($deamped)) {
+      print "⚡", yellow("DeAmped"), ": ";
+      $ARGV[$i] = $deamped;
+      $deamped = 1;
+    }
+  }
+
+  if ($ARGV[$i] =~ m|^https?://(www\.\|m\.)?youtube\.com/watch\?v=([\w-]+)|i) {
     printYouTubeMetaData($2);
   } elsif ($ARGV[$i] =~ m|^https?://youtu\.be/([\w-]+)|i) {
     printYouTubeMetaData($1);
@@ -65,8 +80,20 @@ while ($i <= $#ARGV) {
     doAmazon($ARGV[$i]);
   } elsif ($ARGV[$i] =~ m|^https?://(www\.)?xkcd.com/(\d+)/?$|) {
     doXkcd($2);
+  } elsif ($ARGV[$i] =~ m|^https?://(www\.)?google.com/maps/.*@([0-9.-]+),([0-9.-]+)|i) {
+    doQth($2,$3);
   } elsif ($ARGV[$i] =~ m|^https?://goo\.gl/maps/|i or
 	  $ARGV[$i] =~ m|^https?://(www\.)?google\.com/maps/|i) {
+    # noop
+  } elsif ($ARGV[$i] =~ m|^https?://(\w+\.)?imgur\.com/|) {
+    doImgur($ARGV[$i]);
+  } elsif ($ARGV[$i] =~ m|^https?://wireless2\.fcc\.gov/UlsApp/ApplicationSearch/.*\?applID=|) {
+    doFccApp($ARGV[$i]);
+  } elsif ($ARGV[$i] =~ m|^https?://(www\.)?ae7q\.com/query/list/GenLicAvail.php\?REGION=([0-9]+)|) {
+    doAe7qRegion($2);
+  } elsif ($ARGV[$i] =~ m|^https?://(www\.)?ae7q\.com/query/data/CallHistory\.php\?CALL=([A-Z0-9]+)|) {
+    doAe7qCall($2);
+  } elsif ($ARGV[$i] =~ m|^https?://.*zoom\.us/j/[0-9]+|) {
     # noop
   } elsif ($ARGV[$i] =~ m|^https?://| and
 	  not $ARGV[$i] =~ /\.(bmp|tif|gif|jpe?g|jpe|png|mp[34]|pdf|docx?|xlsx?|exe|dll|msi|wav|wma|flac|shn|7z|zip|deb|rpm|rar|tgz|tar|dmg|iso|apk|jar|avi|m4v|mov|mpe?g|vob|swf|wmv|gz|xz|bz2)/i) {
@@ -80,11 +107,22 @@ sub printYouTubeMetaData {
   my $id = shift;
   my $url = "https://youtube.com/watch?v=$id";
   my $shortcut = "http://youtu.be/$id";
+  my $vidimg = "https://i.ytimg.com/vi/$id/hqdefault.jpg";
   my $done = 0;
   my ($title, $len, $desc, $count, $pubdate, $genre, $nsfw, $unlisted, $paid, $author, $likes, $dislikes, $live);
-  open(HTTP, '-|', "curl --max-time $timeout -L -k -s '$url'");
+  open(HTTP, '-|', "curl -4 --max-time $timeout -L -k -s '$url'");
   binmode(HTTP, ":utf8");
   while(<HTTP>) {
+    if (/Our systems have detected unusual traffic from your computer network./) {
+      print;
+      exit 0;
+    }
+    if (/This video is no longer available/) {
+      s/^\s*//; s/\s*$//;
+      print;
+      print "\n";
+      exit 0;
+    }
     if (/<meta itemprop="(\w+)" content="([^"]*)">/) {
       my ($k, $v) = ($1, $2);
       $v = decodeEntities($v);
@@ -99,32 +137,37 @@ sub printYouTubeMetaData {
       $unlisted = $v eq "True" ? 1 : 0 if $k eq "unlisted";
       $paid = $v eq "True" ? 1 : 0 if $k eq "paid";
     }
-    if (/"author":"([^"]+)"/) {
+    if (/"author\\":\\"([^"]+)\\"/) {
       $author = $1;
     }
-    if (/"length_seconds":"(\d+)"/) {
+    if (/dur=(\d+)/) {
       $len = $1;
+    }
+    if (/([0-9,]+) watching now/i) {
+      my $t = $1;
+      $t =~ s/,//g;
+      $count = $t if $t > 2;
     }
 #    if (/"shortDescription":"([^"]+)"/) {
 #      $desc = $1;
 #    }
     if (/"like this video along with ([0-9,]+) other people"/) {
       $likes = $1;
-      $likes =~ s/,//;
+      $likes =~ s/,//g;
     }
     if (/"dislike this video along with ([0-9,]+) other people"/) {
       $dislikes = $1;
-      $dislikes =~ s/,//;
+      $dislikes =~ s/,//g;
     }
-    if (/"livestream":"1"/) {
+    if (/"isLiveNow\\":true/) {
       $live = 1;
     }
   }
   close(HTTP);
 
   $desc = "(no description)" if $desc =~ /^\s*$/;
-  if (length $desc > 300) {
-    $desc = substr($desc, 0, 300) . "…";
+  if (length $desc > 100) {
+    $desc = substr($desc, 0, 100) . "…";
   }
 
   use integer;
@@ -137,14 +180,16 @@ sub printYouTubeMetaData {
   print "${m}m" if $m > 0;
   print "${s}s;" if $s > 0;
   print red("[LIVE]") if $live == 1;
-  print " $count views";
+  print " $count views" if not defined $live or $live != 1;
+  print " $count watching" if $live == 1;
   print green(" ${likes}↑") if defined $likes;
   print red(" ${dislikes}↓") if defined $dislikes;
-  print " ($genre)" if defined $genre;
+#  print " ($genre)" if defined $genre;
   print red(" [NSFW]") if $nsfw == 1;
   print green(" [PAID]") if $paid == 1;
   print yellow(" [UNLISTED]") if $unlisted == 1;
-  print ": $desc $shortcut\n";
+#  print ": $desc $shortcut img: $vidimg\n";
+  print ": $desc img: $vidimg\n";
 }
 
 
@@ -166,9 +211,9 @@ sub doTwitter {
   }
   #  'curl --max-time $timeout -Ls -o /dev/null -w "%{url_effective}" "https://t.co/aoVVgKEfqC"'
 
-  if ($url =~ /https?:\/\/(mobile\.)?twitter\.com\/(\w+)\/status\/(\d+)/) {
+  if ($url =~ /https?:\/\/(mobile\.)?twitter\.com\/(\w+)\/status(es)?\/(\d+)/) {
     $username = $2;
-    $id = $3;
+    $id = $4;
   }
 
   if (not defined $username and $url =~ /https?:\/\/(mobile\.)?twitter\.com\/(\w+)\/?/) {
@@ -275,6 +320,15 @@ sub doTwitter {
     }
     if (/<a href="#" class="">([^<]+)<\/a>/) {
       $date = $1;
+      # 4:30 PM - 22 Sep 2018
+      if ($date =~ /(\d\d?):(\d\d) ([AP]M) - (\d+) (\w+) (\d+)$/) {
+	# convert from localtime in california
+	$ENV{TZ} = "PST8PDT";
+	my ($m, $h, $d, $mon, $y) = ($2, $1, $4, $5, $6);
+	$h += 12 if $3 eq "PM" and $h != 12;
+	my $time = timelocal(0, $m, $h, $d, monthNameToNum($mon) - 1, $y);
+	$date = scalar(gmtime($time)) . " UTC";
+      }
     }
     if (/<div class="fullname"/) {
       $infullname = 1;
@@ -282,6 +336,7 @@ sub doTwitter {
     }
     if ($infullname == 1 and /<strong>([^<]+)<\/strong>/) {
       $fullname = $1;
+      $fullname = decodeEntities($fullname)
     }
     if ($infullname == 1 and /verified.gif/) {
       $verified = 1;
@@ -420,7 +475,8 @@ sub doWiki {
 
 sub doHtml {
   my $url = shift;
-  my ($title, $desc, $charset, $contenttype, $httpcode, $shortUrl);
+  my ($title, $desc, $charset, $contenttype, $httpcode, $shortUrl, $decoded);
+  $decoded = 0;
   # -D - => output headers
   # -f => fail to have no output for 404
   # -L => follow 302
@@ -450,29 +506,44 @@ sub doHtml {
 	if ($1 =~ /UTF-?8/i) {
 	  binmode(HTTP, ":utf8");
 	  $charset = "utf8";
+	  $decoded = 1;
 	}
       }
       last;
     }
   }
   local $/;   # read entire file -- FIXME: potentially memory hungry
-  my $page = <HTTP>;
+  my $origpage = <HTTP>;
+  my $page;
   close(HTTP);
-  #print $page;
 
   if (not defined($charset) and
-      $page =~ /^.*<meta\s+http-equiv="Content-Type"\s+content=".*?charset=([^"]+)"/mi) {
+      $origpage =~ /^.*<meta\s+http-equiv="Content-Type"\s+content=".*?charset=([^"]+)"/mi) {
     $charset = $1;
-    $page = decode($charset, $page);
   }
   if (not defined($charset) and
-      $page =~ /^.*<meta\s+charset="([^"]+)"/mi) {
+      $origpage =~ /^.*<meta\s+charset="([^"]+)"/mi) {
     $charset = $1;
-    $page = decode($charset, $page);
+  }
+
+  if (defined($charset) and not $decoded) {
+    $page = decode($charset, $origpage);
+  } else {
+    $page = $origpage;
+  }
+
+  if (defined($page) and not utf8::valid($page)) {
+    # failed utf8
+    print "Error: Invalid UTF-8 sequence(s)\n";
+    exit 0;
+  }
+  if (not defined($page)) {
+    $page = $origpage;
   }
 
   #print "charset: $charset\n";
   #print "is utf8? ", (utf8::is_utf8($page)), "\n";
+  #print "valid utf8? ", (utf8::valid($page)), "\n";
 
   if ($page =~ /<title.*?>\s*([^<]+?)\s*<\/title>/im) {
     $title = $1;
@@ -531,52 +602,25 @@ sub doHtml {
   #print "title: $title\n";
   #print "desc: $desc\n";
 
-  return if not defined($title) and not defined($desc);
-
+  our $deamped;
   $shortUrl = shortenUrl($url)
-	if not defined($shortUrl) or length($shortUrl) > 60;
+	if not defined($shortUrl) or length($shortUrl) > 50 or $deamped == 1;
+
+  return if not defined($title) and not defined($desc) and not defined($shortUrl);
 
   if (defined($desc) and length($desc) > 300) {
     $desc = substr($desc, 0, 300) . "…";
   }
-  $title =~ tr/\n\r/  /;
-  $desc =~ tr/\n\r/  /;
-  $title = decodeEntities($title);
-  $desc = decodeEntities($desc);
 
-  #print "title: $title\n";
-  #print "desc: $desc\n";
+  $title = decodeEntities($title) if defined($title);
+  $desc = decodeEntities($desc) if defined($desc);
+  $title =~ tr/\n\r/  / if defined($title);
+  $desc =~ tr/\n\r/  / if defined($desc);
 
   print bold("\"$title\"") if defined ($title);
   print " $shortUrl" if defined($shortUrl) and length($shortUrl) > 0;
   print " — $desc" if defined ($desc);
   print "\n";
-}
-
-sub shortenUrl {
-  my $url = shift;
-  return undef if length($url) < 60;
-
-  my $shortUrl;
-  my $encodedUrl = uri_escape($url);
-  our $bitly_apikey;  # loaded from file
-  return undef if not defined($bitly_apikey);
-  my $rest = "https://api-ssl.bitly.com/v3/shorten?access_token=$bitly_apikey&domain=j.mp&format=txt&longUrl=$encodedUrl";
-
-  open(HTTP, '-|', "curl --max-time $timeout -L -k -s '$rest'");
-  binmode(HTTP, ":utf8");
-  while(<HTTP>) {
-    s/[\r\n]//g;
-    $shortUrl = $_;
-  }
-  close(HTTP);
-
-  # success
-  return $shortUrl if $shortUrl =~ /^http/;
-
-  # failure case
-  print "error: $shortUrl\n";
-  return undef;
 }
 
 sub doReddit {
@@ -615,10 +659,13 @@ sub doQthCom {
   my $url = shift;
   my ($title, $desc, $call);
 
+  # Temporary proxy - TODO: permanent URL?
+  $url =~ s|https?://swap\.qth\.com/view_ad\.php\?counter=|https://app-oa25k.lamp.app/phpproxy/qth-proxy.php?id=|i;
+
   open(HTTP, '-|', "curl --max-time $timeout -L -k -s '$url'");
   binmode(HTTP, ":utf8");
   while(<HTTP>) {
-    if (m|<font size=3 face="Arial,Helvetica">\s*([^<]+)</font></B>|) {
+    if (m|<font size=3 face="Arial,Helvetica">\s*(.*?)\s*</font></B>|) {
       $title = $1;
     }
     if (not defined($desc) and
@@ -662,10 +709,19 @@ sub doQrzDb {
   exec "$libdir/qrz", "--compact", "$call" or die "error execing qrz for $call";
 }
 
+sub doQth {
+  my ($lat, $lon) = $@;
+  my $libdir = dirname(realpath(__FILE__));
+  if (-e "$libdir/grid") {
+    exec "$libdir/grid", "$2,$3" or die "error execing grid for $2,$3";
+  }
+}
+
 sub doAmazon {
   my $url = shift;
-  #my $useragent = "Mozilla/5.0 (X11; Linux x86_64; rv:52.0) Gecko/20100101 Firefox/52.0";
-  my $useragent = "foo";
+  my $shortUrl = shortenUrl($url);
+  my $useragent = "Mozilla/5.0 (X11; Linux x86_64; rv:68.0) Gecko/20100101 Firefox/68.0";
+  #my $useragent = "foo";
   my ($price, $curr, $stars, $prime, $vendor, $fulfilled, $title);
   open(HTTP, '-|', "curl -A \"$useragent\" --compressed --max-time $timeout -L -k -s '$url'");
   binmode(HTTP, ":utf8");
@@ -674,14 +730,27 @@ sub doAmazon {
     #$pricespan = 1 if /span id="price_inside_buybox"/;
     #if ($pricespan == 1 and /\$([0-9.]+)\s*$/) {
     #}
+    if (/Sorry, we just need to make sure you're not a robot./) {
+      print "Captcha encountered; $shortUrl\n";
+      return;
+    }
+    if (/discuss automated access/) {
+      print "Amazon anti-scraper filter encountered; $shortUrl\n";
+      return;
+    }
+    if (/Something Went Wrong/i) {
+      print "Something went wrong; $shortUrl\n";
+      return;
+    }
+
     if (/<title>(Amazon.com\s*:|Amazon\s*\|)?\s*([^<]*?)(-?\s*Amazon.com|-?\s*Amazon Canada)?<\/title>/) {
       $title = decodeEntities($2);
       $title =~ s/Amazon.co.uk:\s*//;
     }
-    if (/<span id="priceblock_ourprice"[^>]+>([\$￥£]|CDN\$)\s*([0-9.,]+)</) {
-      $curr = $1;
+    if (/<span id="priceblock_(ourprice|pospromoprice)"[^>]+>([\$￥£]|CDN\$)\s*([0-9.,]+)</) {
+      $curr = $2;
       $curr =~ tr/￥/¥/;
-      $price = $2;
+      $price = $3;
     }
     if (/<span id="priceblock_ourprice"[^>]+>([\$￥£]|CDN\$)\s*([0-9.,]+) - ([\$￥£]|CDN\$)\s*([0-9.,]+)</) {
       $curr = $1;
@@ -689,6 +758,16 @@ sub doAmazon {
       $price = "$2 to $1$4";
     }
     if (not defined $price and /span class=.*offer-price.*">([\$￥£]|CDN\$)\s*([0-9.,]+)</) {
+      $curr = $1;
+      $curr =~ tr/￥/¥/;
+      $price = $2;
+    }
+    if (not defined $price and /\d New.*span class=.*a-color-price.*>\s*([\$￥£]|CDN\$)\s*([0-9.,]+)\s*</) {
+      $curr = $1;
+      $curr =~ tr/￥/¥/;
+      $price = $2;
+    }
+    if (not defined $price and not /Used/ and /span class=.*a-color-price.*>\s*([\$￥£]|CDN\$)\s*([0-9.,]+)\s*</) {
       $curr = $1;
       $curr =~ tr/￥/¥/;
       $price = $2;
@@ -748,6 +827,7 @@ sub doXkcd {
       if ($e =~ /"(\w+)": (\d+|"[^"]+"),/) {
 	my ($k, $v) = ($1, $2);
 	$v =~ s/^"//; $v =~ s/"$//;
+	$v =~ s/\\u([0-9a-f]{2,4})/chr(hex($1))/ige;
 	#print "$k==>$v\n";
 	$data{$k} = $v;
       }
@@ -779,4 +859,238 @@ sub doXkcd {
   print " -- alt: $data{alt}"
     if defined $data{alt} and length($data{alt}) > 0;
   print "\n";
+}
+
+sub doImgur {
+  my $url = shift;
+  return if not defined $imgur_key;
+
+  my $isgal = 0;
+  my $isalb = 0;
+  my $isimg = 0;
+
+  my $hash = undef;
+  if ($url =~ m!/gallery/([0-9A-Za-z_]+)/?$!) {
+    $hash = $1;
+    $isgal = 1;
+  }
+  if ($url =~ m!/a/([0-9A-Za-z_]+)/?$!) {
+    $hash = $1;
+    $isalb = 1;
+  }
+  if ($url =~ m!imgur.com/+([0-9A-Za-z_]+)(\.(png|gifv?|jpe?g|mp4))?$!i) {
+    $hash = $1;
+    $isimg = 1;
+  }
+  if ($url =~ m!imgur.com/r/\w+/([0-9A-Za-z_]+)/?$!) {
+    $hash = $1;
+    $isimg = 1;
+  }
+  if ($url =~ m!imgur.com/t/\w+/([0-9A-Za-z_]+)/?$!) {
+    $hash = $1;
+    $isgal = 1;
+  }
+
+  my $apiurl = undef;
+  $apiurl = "https://api.imgur.com/3/image/$hash" if $isimg == 1;
+  $apiurl = "https://api.imgur.com/3/album/$hash" if $isalb == 1;
+  $apiurl = "https://api.imgur.com/3/gallery/$hash" if $isgal == 1;
+
+  print "unrecognized url: $url\n" if not defined $apiurl;
+  return if not defined $apiurl;
+
+  my %data;
+  open(HTTP, '-|', "curl --max-time $timeout -L -k -s '$apiurl' --request GET --header 'Authorization: Client-ID $imgur_key'");
+  binmode(HTTP, ":utf8");
+  while(<HTTP>) {
+    #print;
+    my $lines = $_;
+    $lines =~ s/(null|true|false|"|\d),\s*"/\1,\n"/g;
+    my @vals = split("\n", $lines);
+    foreach my $e (@vals) {
+      #print "$e\n";
+      if ($e =~ /"(\w+)":\s*(\d+|"[^"]+"|true|false|null),/) {
+	my ($k, $v) = ($1, $2);
+	$v =~ s/^"//; $v =~ s/"$//;
+	if (not defined $data{$k}) {
+	  #print "$k==>$v\n";
+	  $data{$k} = $v;
+	  $data{$k} = undef if $v eq "null";
+	}
+      }
+    }
+  }
+  close(HTTP);
+
+  return if not defined $data{success} or $data{success} eq "false";
+
+  my $title = $data{title};
+  $title = unescape($title) if defined $title;
+  $title = "Untitled" if not defined $title;
+  my $desc = $data{description};
+  if (defined $desc) {
+    $desc = unescape($desc);
+    if (length $desc > 100) {
+      $desc = substr($desc, 0, 100) . "…";
+    }
+  }
+
+  use integer;
+  #print "$url";
+  print bold(" \"$title\"") if defined $title;
+  print " by \@$data{account_url}" if defined $data{account_url};
+#  print " on ", scalar(gmtime($data{datetime})), " UTC;"
+#    if defined $data{datetime};
+  print " $data{views} views" if defined $data{views};
+  print green(" $data{ups}↑") if defined $data{ups};
+  print red(" $data{downs}↓") if defined $data{downs};
+  print " /r/$data{section}" if defined $data{section};
+  print " [$data{images_count} images]"
+    if defined $data{images_count} and $data{images_count} > 1;
+  print " [animated]" if defined $data{animated} and $data{animated} eq "true";
+  print " [$data{width}x$data{height}]"
+    if defined $data{width} and $data{width} > 0;
+  print " (" . $data{size} / 1024 . "kB)"
+    if defined $data{size} and $data{size} > 0;
+  print yellow(" [sound]")
+    if defined $data{has_sound} and $data{has_sound} eq "true";
+  print red(" [NSFW]") if defined $data{nsfw} and $data{nsfw} eq "true";
+  print " preview: http://i.imgur.com/${hash}l.jpg" if $isimg == 1 and
+	($data{width} > 640 or $data{height} > 640);
+  print ": $desc" if defined $desc;
+  print "\n";
+}
+
+sub doFccApp {
+  my $url = shift;
+  my ($appId, $call, $status, $receipt, $action, $systematic, $relative, $req);
+  my $purpose;
+  if ($url =~ m|https?://wireless2.fcc.gov/UlsApp/ApplicationSearch/.*\?applID=(\d+)|) {
+    $appId = $1;
+  }
+  $url = "http://wireless2.fcc.gov/UlsApp/ApplicationSearch/applMain.jsp?applID=$appId";
+  #print "$url\n";
+  open(HTTP, '-|', "curl --max-time $timeout -L -k -s '$url'");
+  my $inStatus = 0;
+  my $inReceipt = 0;
+  my $inAction = 0;
+  while(<HTTP>) {
+    #print;
+    if (m|title="Link to License in new window" target="_new">([^<]+)</a>|) {
+      $call = $1;
+      #print "call $call\n"
+    }
+    $purpose = "Administrative Update" if /Administrative Update/;
+    $purpose = "Renewal" if /Renewal Only/;
+    $purpose = "New License" if /NE - New/;
+    $inStatus = 1 if />Application Status</;
+    if ($inStatus and /-\s*(\w+)\s*$/) {
+      $status = $1;
+      #print "status: $status\n";
+      $inStatus = 0;
+    }
+    $inReceipt = 1 if />Receipt Date</;
+    if ($inReceipt and m|\s*([01][0-9]/[0-3][0-9]/\d{4})(&nbsp;)?<|) {
+      $receipt = $1;
+      #print "receipt: $receipt\n";
+      $inReceipt = 0;
+    }
+    $inAction = 1 if />Action Date</;
+    if ($inAction and m|\s*([01][0-9]/[0-3][0-9]/\d{4})(&nbsp;)?<|) {
+      $action = $1;
+      #print "action: $action\n";
+      $inAction = 0;
+    }
+  }
+  close(HTTP);
+
+  $url = "http://wireless2.fcc.gov/UlsApp/ApplicationSearch/applServiceSpecific.jsp?applID=$appId";
+  open(HTTP, '-|', "curl --max-time $timeout -L -k -s '$url'");
+  my $inSystematic = 0;
+  my $inPreflist = 0;
+  my $inReq = 0;
+  my @vanities;
+  while(<HTTP>) {
+    $inSystematic = 1 if />Request to change a station call sign systematically\?</;
+    if ($inSystematic and /\s*(.*)&nbsp;</) {
+      $systematic = $1;
+      #print "systematic: $systematic\n";
+      $systematic = undef if $systematic eq "";
+      $inSystematic = 0;
+    }
+    if (/Close Relative of Former Holder - (.+?)\s*$/) {
+      $relative = $1;
+    }
+    $inReq = 1 if />Requested Call Sign</;
+    if ($inReq and /^\s*([A-Z0-9]+)\s*&nbsp;</) {
+      $req = $1;
+      $inReq = 0;
+    }
+    $inPreflist = 1 if /Reference Copy Displays Call Sign Preference Information Out Of Order/;
+    if ($inPreflist and /(&nbsp;)*(\d+)\.(&nbsp;)*([A-Z0-9]+)\s*</) {
+      my ($n, $c) = ($2, $4);
+      #print "$n: $c\n";
+      $vanities[$n-1] = $c;
+    }
+  }
+  close(HTTP);
+
+  if (defined $call) {
+    print bold($call), ": ";
+    $status = lightblue($status) if $status eq "Pending";
+    $status = green($status) if $status eq "Granted";
+    $status = red($status) if $status eq "Dismissed";
+    $status = yellow($status) if $status eq "Inactive";
+    print "$status -- ";
+    print "$purpose; " if defined $purpose;
+    print "systematic; " if defined $systematic and $systematic ne "N";
+    print "received $receipt, last action $action; " if defined $receipt;
+    print "vanity list: ", join(", ", @vanities) if defined $vanities[0];
+    print "relative: $relative " if defined $relative;
+    print "requested: $req" if defined $req;
+    print "\n";
+  }
+}
+
+sub doAe7qRegion {
+  my $area = shift;
+  my $libdir = dirname(realpath(__FILE__));
+  if (-e "$libdir/ae7q") {
+    exec "$libdir/ae7q", "$area" or die "error execing ae7q for '$area'";
+  }
+}
+
+sub doAe7qCall {
+  my $call = shift;
+  my $libdir = dirname(realpath(__FILE__));
+  if (-e "$libdir/ae7q") {
+    exec "$libdir/ae7q", "$call" or die "error execing ae7q for '$call'";
+  }
+}
+
+sub unescape {
+  my $s = shift;
+  $s =~ s/\\n/ /g;
+  $s =~ s/\\"/"/g;
+  $s =~ s|\\/|/|g;
+  $s =~ s|\\u([0-9a-f]{4})|chr hex $1|eg;
+  return $s;
+}
+
+sub uniq {
+  my %seen;
+  grep !$seen{$_}++, @_;
+}
+
+sub deamp {
+  my $url = shift;
+  my $deamped;
+  open (HTTP, '-|', "curl --max-time $timeout -L -k -s '$url'");
+  while (<HTTP>) {
+    if (m|<link\s+rel="?canonical"?\s+href="?(.*?)"?\s*/>|i) {
+      $deamped = $1;
+    }
+  }
+  close(HTTP);
+  return $deamped;
 }

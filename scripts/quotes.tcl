@@ -11,11 +11,17 @@ bind pub - !quotesearch q_pubquotesearch
 proc q_addquote { nick uhost hand chan arg } {
   set quotefile "quotelist-$chan"
 
+  set newarg [string trim $arg]
+  if { [string length $newarg] == 0 } {
+    putchan $chan "usage: !addquote <msg>"
+  }
+
   if { [file exists $quotefile] } {
     set qf [open $quotefile a]
   } else {
     set qf [open $quotefile w]
   }
+  fconfigure $qf -encoding utf-8
   
   set entry [list]
   lappend entry $arg
@@ -34,6 +40,7 @@ proc q_pubquote { nick uhost hand chan arg } {
   if { [file exists $quotefile] } {
 
     set qf [open $quotefile r]
+    fconfigure $qf -encoding utf-8
     set done 0
 
     set fd [open "|wc -l $quotefile" r]

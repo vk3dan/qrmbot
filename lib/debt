@@ -10,12 +10,12 @@ binmode(STDOUT, ":utf8");
 use File::Basename;
 use Cwd 'realpath';
 use lib dirname(realpath(__FILE__));
-use Location;
+use Util;
 
 my $url = "https://treasurydirect.gov/NP/debt/rss";
 my ($date, $public, $intra, $total);
 
-open (HTTP, '-|', "curl -k -s '$url'");
+open (HTTP, '-|', "curl -L -k -s '$url'");
 while (<HTTP>) {
   chomp;
   if (not $date and m|<title>Debt to the Penny for ([0-9/]+)</title>|i) {

@@ -17,6 +17,7 @@ use File::Basename;
 use Cwd 'realpath';
 use lib dirname(realpath(__FILE__));
 use Location;
+use Util;
 
 my $username = $ENV{'USER'} || $ENV{'USERNAME'} || getpwuid($<);
 
@@ -27,7 +28,7 @@ $exitnonzeroonerror = 0 if $username eq 'eggdrop';
 my $timestampfile = $ENV{'HOME'}.'/.spottimestamps';
 my $hamspotloginfile = $ENV{'HOME'}.'/.hamspotlogin';
 
-my $defaultSpots = 10;
+my $defaultSpots = 20;
 my $defaultSpotsForEggdrop = 3;
 
 # end config
@@ -88,6 +89,12 @@ while ($i <= $#ARGV) {
     $ham = 1;
     $i++; next;
   }
+  if (!defined($callsign) and $ARGV[$i] =~ /^\d{3,}$/) {
+    # callsign is frequency in khz -- search for matching spot
+    $callsign = $ARGV[$i];
+    $psk = $ham = 0;
+    $dxw = $rbn = 1;
+  }
   if (!defined($callsign)) {
     $callsign = uc $ARGV[$i];
     $i++; next;
@@ -108,7 +115,7 @@ if ($dxw == 0 && $rbn == 0 && $psk == 0 && $ham == 0) {
 
 $callsign = "" unless defined $callsign;
 
-if (!($callsign =~ m/^([A-Z0-9]+[0-9]?\/)?[A-Z0-9]+[0-9][A-Z]+(\/[A-Z0-9]+)?$/)) {
+if (not ($callsign =~ m/^([A-Z0-9]+[0-9]?\/)?[A-Z0-9]+[0-9][A-Z]+(\/[A-Z0-9]+)?$/) and not ($callsign =~ m/^\d{3,}$/)) {
   print "invalid callsign: $callsign\n";
   exit $exitnonzeroonerror;
 }
@@ -156,7 +163,7 @@ sub doPSKreporter
 #{"receiverCallsign":"JA8HZL","receiverLocator":"QN02TP","senderCallsign":"JA2HOL","senderLocator":"PM95ie20rh","frequency":10139114,"flowStartSeconds":1461063164,"mode":"JT65","isSender":1,"isReceiver":0,"senderDXCC":"Japan","senderDXCCCode":"JA","senderDXCCLocator":"PM96","senderLotwUpload":"2016-04-10","senderEqslAuthGuar":"A","sNR":-4},
 
   # using IPv4 because I got greedy and got banned using ipv6.
-#  print "curl -4 --max-time 4 --retry 1 -s '$url'\n";
+#  print "curl -4 -k -L --max-time 4 --retry 1 -s '$url'\n";
   open (HTTP, '-|', "curl -L -4 -k --max-time 4 --retry 1 -s '$url'");
   while (<HTTP>) {
     chomp;
@@ -193,6 +200,8 @@ sub doPSKreporter
 	my $msg = "";
 	$msg .= "$rec{mode} " if defined $rec{mode};
 	$msg .= "$rec{sNR} dB " if defined $rec{sNR};
+	$rec{receiverLocator} = substr($rec{receiverLocator},0,6) # \
+	  if defined $rec{receiverLocator} and length($rec{receiverLocator}) > 6;
 	if (defined($rec{receiverLocator}) && defined($rec{senderLocator})) {
 	  $msg .= "($rec{receiverLocator} " .
 		  sprintf("%.0f km)",
@@ -234,11 +243,24 @@ sub doDXWatch
     $rb = 0;
   }
 
+  my $freqmode = 0;
+  $freqmode = 1 if $callsign =~ m/^\d+$/;
+  my @seencalls;
+
   my $url;
-  if ($rb == 0) {
-    $url = 'https://www.dxwatch.com/dxsd1/s.php?s=0&r=50&cdx=' . $callsign;
+  if ($freqmode == 0) {
+    if ($rb == 0) {
+      $url = 'https://www.dxwatch.com/dxsd1/s.php?s=0&r=50&cdx=' . $callsign;
+    } else {
+      $url = 'http://www.reversebeacon.net/dxsd1/sk.php?s=0&r=15&cdx=' . $callsign;
+    }
   } else {
-    $url = 'http://www.reversebeacon.net/dxsd1/sk.php?s=0&r=15&cdx=' . $callsign;
+    # frequency mode
+    if ($rb == 0) {
+      $url = 'https://www.dxwatch.com/dxsd1/s.php?s=0&r=50&d=1';
+    } else {
+      $url = 'http://www.reversebeacon.net/dxsd1/sk.php?s=0&r=100&d=1';
+    }
   }
 
   my $modes_ref = {
@@ -281,7 +303,7 @@ sub doDXWatch
   #open (HTTP, '-|', "cat dxwatch-$callsign.json");
   #open (HTTP, '-|', "cat rb-N7XM.json");
   #print "$url\n";
-#  print "curl -k --max-time 4 --retry 1 -s '$url'";
+#  print "curl -k -L --max-time 4 --retry 1 -s '$url'";
   open (HTTP, '-|', "curl -L -k --max-time 4 --retry 1 -s '$url'");
   while (<HTTP>) {
     if (/<title>(\d\d\d .*?)<\/title>/) {
@@ -291,12 +313,14 @@ sub doDXWatch
     }
 
     s/},"fname".*$//;
+    s/},"msg".*$//;
     s/\{"s":\{//;
     s/],"/]\n"/g;
 
     my @data = split /\n/;
     my %rec;
     foreach my $line (@data) {
+      #print;
       if (/This filter returned no spot/) {
 	last;
       }
@@ -326,9 +350,7 @@ sub doDXWatch
 	#say $vals;
 	$csv->parse($vals) or say "unable to parse csv: $vals";
 	($de, $freq, $dx, $cmt, $datetime, $age, $x, $y) = $csv->fields();
-	$cmt =~ s/&lt;/</g;
-	$cmt =~ s/&gt;/>/g;
-	$cmt =~ s/&amp;/&/g;
+	$cmt = decodeEntities($cmt);
       }
 
       my ($ts, $dt);
@@ -348,13 +370,25 @@ sub doDXWatch
 	$lastspot = $ts unless ($ts < $lastspot);
       }
 
-      push (@spots, {ts => $ts,
-		      src => (($rb == 1) ? "r" : "d"),
-		      de => $de,
-		      dx => $dx,
-		      f => $freq,
-		      msg => substr($cmt, 0, 28)}
-		    );
+      my $seen = scalar(grep { /^$dx$/ } @seencalls);
+      #print("seen: $seen : $dx : @seencalls\n");
+
+      if ($freqmode == 0 or
+	  ($freqmode == 1 and
+	    ($freq > $callsign - 5) and
+	    ($freq < $callsign + 5) and
+	    $seen == 0))
+      {
+	push (@spots, {ts => $ts,
+			src => (($rb == 1) ? "r" : "d"),
+			de => $de,
+			dx => $dx,
+			f => $freq,
+			msg => substr($cmt, 0, 28)}
+		      );
+	push (@seencalls, $dx);
+      }
+
 
       #printf "%-7s %-7s %5d %-28s %s\n", $de, $dx, $freq, substr($cmt, 0, 28), $datetime;
     }

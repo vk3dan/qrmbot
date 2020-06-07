@@ -13,6 +13,7 @@ use Astro::Coord::ECI::TLE::Set;
 use Math::Trig;
 #use Data::Dumper;
 use POSIX qw(strftime);
+use List::Util qw[min max];
 binmode(STDOUT, ":utf8");
 
 use File::Basename;
@@ -20,8 +21,10 @@ use Cwd 'realpath';
 use lib dirname(realpath(__FILE__));
 use Colors;
 use Location;
+use Util;
 
 my $tleurl="http://www.amsat.org/amsat/ftp/keps/current/nasabare.txt";
+my $satnogsurl = "https://db.satnogs.org/api/transmitters/?format=json";
 
 # potential changes:
 # 1) parameter for number of passes / length of time?
@@ -60,10 +63,15 @@ my $username = $ENV{'USER'} || $ENV{'USERNAME'} || getpwuid($<);
 our $exitnonzeroonerror = 1;
 $exitnonzeroonerror = 0 if $username eq 'eggdrop';
 
+my $passThreshold = 5;       # degress above horizon
+my $goodPassThreshold = 45;  # degress above horizon
+
+my $usageParams = "<sat> <qth>|<grid> [--commonpass <qth2>|<grid2>]";
+
 if ($#ARGV < 0 || length($ARGV[0]) == 0) {
   #print "usage: $0 <sat> <grid>|<qth> [<elev>ft|<elev>m]\n";
-  print "usage: $0 <sat> <qth>|<grid>\n" if $username ne "eggdrop";
-  print "usage: !sat <sat> <qth>|<grid>\n" if $username eq "eggdrop";
+  print "usage: $0 $usageParams\n" if $username ne "eggdrop";
+  print "usage: !sat $usageParams\n" if $username eq "eggdrop";
   exit $exitnonzeroonerror;
 }
 
@@ -71,8 +79,12 @@ if ($#ARGV < 0 || length($ARGV[0]) == 0) {
 @ARGV=split(' ', join(' ',@ARGV));
 
 my $query = "";
+my $query2 = "";
 my $sat = undef;
 my $elev_m = "0";
+my $doinfo = 0;
+my $dopass = 0;
+my $station2 = 0;
 my $i = 0;
 while ($i <= $#ARGV) {
   if ( $ARGV[$i] =~ /^([0-9]+)(ft|m)/ ) {
@@ -81,11 +93,32 @@ while ($i <= $#ARGV) {
     } elsif ($2 eq "ft") {
       $elev_m = $1 * 0.3048;  # feet to meters
     }
+  } elsif ($ARGV[$i] eq "--info") {
+    $doinfo = 1;
+  } elsif ($ARGV[$i] eq "--pass") {
+    $dopass = 1;
+  } elsif ($ARGV[$i] eq "--elev") {
+    $i++;
+    if (isNumeric($ARGV[$i])) {
+      $passThreshold = $ARGV[$i];
+    } else {
+      print("error: --elev must be followed by a numeric value representing pass elevation angle threshold\n");
+      exit $exitnonzeroonerror;
+    }
   } elsif (!defined($sat)) {
     $sat = $ARGV[$i];
+  } elsif ($ARGV[$i] eq "--commonpass") {
+    $station2 = 1;
+  } elsif ($ARGV[$i] eq "--geo") {
+    $station2 = 0;
   } else {
-    $query .= " " unless $i == 1;
-    $query .= $ARGV[$i];
+    if ($station2 == 0) {
+      $query .= " " unless $i == 1;
+      $query .= $ARGV[$i];
+    } else {
+      $query2 .= " " unless $i == 1;
+      $query2 .= $ARGV[$i];
+    }
   }
   $i++;
 }
@@ -96,13 +129,19 @@ if ($query =~ /^(.+)\s+[0-9.-]+,[0-9.-]+/) {
 #print "query: $query\n";
 #print "$elev_m\n";
 
+if (not $dopass and not $doinfo) {
+  # do both by default
+  $dopass = $doinfo = 1;
+}
+
 if (length($query) == 0 && $sat ne "list") {
-  print "usage: $0 <sat> <qth>|<grid>\n" if $username ne "eggdrop";
-  print "usage: !sat <sat> <qth>|<grid>\n" if $username eq "eggdrop";
+  print "usage: $0 $usageParams\n" if $username ne "eggdrop";
+  print "usage: !sat $usageParams\n" if $username eq "eggdrop";
   exit $exitnonzeroonerror;
 }
 
 my ($lat, $lon) = (0, 0);
+my ($lat2, $lon2) = (0, 0);
 
 if ($sat ne "list") {
   my $geo = argToCoords($query);
@@ -114,6 +153,16 @@ if ($sat ne "list") {
   #print ("$lat, $lon\n");
 }
 
+if (length($query2) != 0) {
+  my $geo2 = argToCoords($query2);
+  if (!defined($geo2)) {
+    print "error: not found: $query2\n";
+    exit $exitnonzeroonerror;
+  }
+  ($lat2, $lon2) = split(',', $geo2);
+  #print "query2: $query2, $lat2, $lon2\n";
+}
+
 my $now = time();
 
 my $sta = Astro::Coord::ECI->universal($now)->
@@ -121,15 +170,23 @@ my $sta = Astro::Coord::ECI->universal($now)->
 $sta->set(refraction => 0);
 $sta->universal($now);
 
+my $sta2 = undef;
+if (length($query2) != 0) {
+  $sta2 = Astro::Coord::ECI->universal($now)->
+    geodetic(deg2rad($lat2), deg2rad($lon2), 0);  #kilometers
+  $sta2->set(refraction => 0);
+  $sta2->universal($now);
+}
+
 my @data;
-open(TLE, '-|', "curl --max-time 5 -s $tleurl");
+open(TLE, '-|', "curl --max-time 5 -s -k -L $tleurl");
 while (<TLE>) {
   push (@data, $_);
 }
 close(TLE);
 
 #my $seen = 0;
-#open(TLE, '-|', "curl -s http://www.amsat.org/amsat/ftp/keps/current/nasa.all");
+#open(TLE, '-|', "curl -k -L -s http://www.amsat.org/amsat/ftp/keps/current/nasa.all");
 #while (<TLE>) {
 #  if (/TO ALL RADIO AMATEURS/) {
 #    $seen = 1;
@@ -151,7 +208,8 @@ my @elements = Astro::Coord::ECI::TLE::Set->aggregate(
 #print("records: $#data\n");
 
 # only passes for the next 24h
-my $finish = $now + (1 * 86400);
+my $timewindow = 1 * 86400; # seconds
+my $finish = $now + $timewindow;
 
 my $found = 0;
 
@@ -159,31 +217,17 @@ if (defined($aliases{$sat})) {
   $sat = $aliases{lc($sat)};
 }
 
-my @passes;
-my @sats;
-foreach my $tle (@elements) {
-  my $name = $tle->get('name');
-  my $id = $tle->get('id');
-  $name =~ s/ /-/g;
-  push(@sats, $name);
-  if (lc($name) eq lc($sat) or (isNumeric($sat) and $id == $sat)) {
-    #print "$name\n";
-    $tle->validate($now, $finish) or next;
-    $found = 1;
-    #print $tle->tle_verbose(), "\n";
-    #print $name = $tle->get('tle'), "\n";
-    #print "doing passes..\n";
-    $tle->set('pass_threshold', deg2rad(5)); # minimum peak elevation
-    $tle->set('visible', 0);
-    $tle->set('horizon', 0);
-    push(@passes, $tle->pass($sta, $now, $finish));
-  }
-}
-
 if (lc($sat) eq "list") {
+  my @sats;
+  foreach my $tle (@elements) {
+    my $name = $tle->get('name');
+    $name =~ s/ /-/g;
+    push(@sats, $name);
+  }
+
   my $list = join(" ", @sats);
   my $frag = undef;
-  my $limit = 68;
+  my $limit = 67;
   $limit = 400 if $username eq "eggdrop";
   do {
     # line wrap
@@ -199,6 +243,30 @@ if (lc($sat) eq "list") {
   exit 0;
 }
 
+my ($id, $name);
+my @passes;
+my @passes2;
+foreach my $tle (@elements) {
+  my $tlename = $tle->get('name');
+  my $tleid = $tle->get('id');
+  $tlename =~ s/ /-/g;
+  if (lc($tlename) eq lc($sat) or (isNumeric($sat) and $tleid == $sat)) {
+    #print "$tlename\n";
+    $tle->validate($now, $finish) or next;
+    $found = 1;
+    #print $tle->tle_verbose(), "\n";
+    #print $tlename = $tle->get('tle'), "\n";
+    #print "doing passes..\n";
+    $id = $tleid;
+    $name = $tlename;
+    $tle->set('pass_threshold', deg2rad($passThreshold)); # minimum peak elevation
+    $tle->set('visible', 0);
+    $tle->set('horizon', 0);
+    push(@passes, $tle->pass($sta, $now, $finish));
+    push(@passes2, $tle->pass($sta2, $now, $finish)) if defined $sta2;
+  }
+}
+
 if ($found == 0) {
   print "satellite not found: $sat\n";
   exit $exitnonzeroonerror;
@@ -210,14 +278,99 @@ if ($found == 0) {
 
 if ($#passes < 0) {
   print "$sat: no passes found within 24h\n";
-  exit $exitnonzeroonerror;
+  exit $exitnonzeroonerror if not $doinfo;
+}
+
+if (defined $sta2) {
+  my $grid1 = coordToGrid($lat, $lon);
+  my $grid2 = coordToGrid($lat2, $lon2);
+  #print "common passes of $sat between $grid1 and $grid2\n";
+  @passes = sort {$a->{time} <=> $b->{time}} @passes;
+  @passes2 = sort {$a->{time} <=> $b->{time}} @passes2;
+  my ($i, $j) = (0,0);
+  my $found = 0;
+  while ($i < $#passes and $j < $#passes2) {
+    #print "i, j: $i, $j\n";
+    my ($p1s, $p1e) = getStartEnd($passes[$i]);
+    my ($p2s, $p2e) = getStartEnd($passes2[$j]);
+    my ($maxel1, $maxel2) = (0.0,0.0);
+
+    if ($p1e < $p2s) {
+      $i++; next;
+    }
+    if ($p2e < $p1s) {
+      $j++; next;
+    }
+    my $start = max($p1s, $p2s);
+    my $end = min($p1e, $p2e);
+    #print "start: ", strftime("%Y-%m-%d %H:%Mz", gmtime($start)), "\n";
+    #print "end: ", strftime("%Y-%m-%d %H:%Mz", gmtime($end)), "\n";
+    my $delta = 60;
+
+    my $body1 = $passes[$i]{body};
+    my $body2 = $passes2[$j]{body};
+
+    my $sparkline1 = "";
+    my $sparkline2 = "";
+
+    my ($saz1, $eaz1) = (undef, undef);
+    my ($saz2, $eaz2) = (undef, undef);
+
+    for (my $time = $start; $time <= $end; $time += $delta) {
+      $body1->{station} = $sta;
+      eval {$body1->universal($time); 1;} or do {
+	warn $@;
+	last;
+      };
+      my ($azim1, $elev1, $range1) = $body1->azel();
+      $sparkline1 .= elToSpark(rad2deg($elev1));
+      $maxel1 = rad2deg($elev1) if rad2deg($elev1) > $maxel1;
+      $saz1 = rad2deg($azim1) if not defined $saz1;
+      $eaz1 = rad2deg($azim1);
+
+      $body2->{station} = $sta2;
+      eval {$body2->universal($time); 1;} or do {
+	warn $@;
+	last;
+      };
+      my ($azim2, $elev2, $range2) = $body2->azel();
+      $sparkline2 .= elToSpark(rad2deg($elev2));
+      $maxel2 = rad2deg($elev2) if rad2deg($elev2) > $maxel2;
+      $saz2 = rad2deg($azim2) if not defined $saz2;
+      $eaz2 = rad2deg($azim2);
+
+#      printf "%s:: %s: %.1f el @ %.0f az ;\t%s: %.1f el @ %.0f az\n",
+#	strftime("%H:%Mz", gmtime $time),
+#	$grid1, rad2deg($elev1), rad2deg($azim1),
+#	$grid2, rad2deg($elev2), rad2deg($azim2);
+    }
+    printf "%s %s: %3s %s %-3s :%s; max el ~%.0f°\n", $grid1,
+      strftime("%Y-%m-%d %H:%Mz", gmtime $start),
+      azToNEWS($saz1), $sparkline1, azToNEWS($eaz1),
+      strftime("%H:%Mz", gmtime $end), $maxel1;
+    printf "%s %s: %3s %s %-3s :%s; max el ~%.0f°\n", $grid2,
+      strftime("%Y-%m-%d %H:%Mz", gmtime $start),
+      azToNEWS($saz2), $sparkline2, azToNEWS($eaz2),
+      strftime("%H:%Mz", gmtime $end), $maxel2;
+    $found++;
+    $i++; $j++;
+
+    exit 0 if $found >= 2 and $username eq "eggdrop";
+  }
+  if (not $found) {
+    print "No common passes found within the next ", $timewindow/3600, " hours\n";
+  }
+  exit 0;
 }
 
 my $numpasses = 3;
 $numpasses = 100 if $username ne "eggdrop";
 my $first = 1;
 
-my ($id, $name);
+$numpasses = $#passes if $#passes < $numpasses;
+
+goto done if (not $dopass);
+
 foreach my $pass (sort {$a->{time} <=> $b->{time}} @passes) {
   #print "\n";
   foreach my $event (@{$pass->{events}}) {
@@ -270,13 +423,21 @@ foreach my $pass (sort {$a->{time} <=> $b->{time}} @passes) {
 print "\n";
 done:
 
-my $url = "https://db.satnogs.org/api/transmitters/?format=json";
+if (not $doinfo) {
+  exit 0;
+}
+
+if (not defined $id) {
+  print "error: undefined \$id\n";
+  exit $exitnonzeroonerror;
+}
+
 $first = 1;
 # IPv4 because satnogs IPv6 gets cut off
-open(TX, '-|', "curl -4 -s --max-time 10 -L -k $url");
+open(TX, '-|', "curl -4 -s --max-time 10 -L -k $satnogsurl");
 while (<TX>) {
   #print;
-  s/}.{/},\n{/g;
+  s/}.\{/},\n{/g;
   @_ = split "\n";
   foreach my $e (@_) {
     #print STDERR "$e\n" if $e =~ /$id/;
@@ -403,12 +564,39 @@ sub mode {
   print "unknown mode: $val\n";
 }
 
-sub isNumeric {
-  my $val = shift;
-  if ( defined $val ) {
-    return $val =~ /^\d+$/ ? 1 : 0;
+sub getStartEnd {
+  my $pass = shift;
+  my ($start, $end);
+
+  foreach my $event (@{$pass->{events}}) {
+    if ($event->{event} eq "rise") {
+      $start = $event->{time};
+    }
+    if ($event->{event} eq "set") {
+      $end = $event->{time};
+    }
+  }
+  return ($start, $end);
+}
+
+sub elToSpark {
+  my $el = shift;
+  if ($el > 70.0) {
+    return green("█");
+  } elsif ($el > 60.0) {
+    return green("▇");
+  } elsif ($el > 50.0) {
+    return green("▆");
+  } elsif ($el > 40.0) {
+    return green("▅");
+  } elsif ($el > 30.0) {
+    return yellow("▄");
+  } elsif ($el > 20.0) {
+    return yellow("▃");
+  } elsif ($el > 10.0) {
+    return red("▂");
   } else {
-    warn "isNumeric requires an argument!";
+    return red("▁");
   }
 }
 

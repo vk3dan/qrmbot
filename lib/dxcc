@@ -7,11 +7,13 @@
 use strict;
 
 use File::Temp qw(tempfile);
+#use Time::HiRes qw(gettimeofday);
 
 use File::Basename;
 use Cwd 'realpath';
 use lib dirname(realpath(__FILE__));
 use Colors;
+use Location;
 
 # Retrieve from here: http://www.country-files.com/big-cty/
 my $ctydat=$ENV{'HOME'} . "/.cty.dat";
@@ -32,27 +34,62 @@ $exitnonzeroonerror = 0 if $username eq 'eggdrop';
 
 my @lastentity = undef;
 my @records;
+our ($mylat, $mylon, $localgrid);
 
 if ($#ARGV < 0 || length($ARGV[0]) == 0) {
 
   if ($username eq 'eggdrop') {
-    print "usage: !dxcc <callsign>|<prefix>|<name>\n";
+    print "usage: !dxcc <callsign>|<prefix>|<name> [de <grid>|<lat>,<lon>|<qth>]\n";
   } else {
-    print "usage: $0 <callsign>|<prefix>|<name>\n";
+    print "usage: $0 <callsign>|<prefix>|<name> [de <grid>|<lat>,<lon>|<qth>]\n";
   }
   exit $exitnonzeroonerror;
 }
 
-my $term = uc $ARGV[0];
+my ($term, $de);
+
+my $i = 0;
+
+while ($i <= $#ARGV) {
+  if (!defined($de) and $ARGV[$i] =~ /^(--geo|de|from)$/i) {
+    $i++;
+    $de = $ARGV[$i];
+    $i++;
+    next;
+  }
+  if (defined($de) and $ARGV[$i] =~ /^--geo$/) {
+    # in case we have "de XXX --geo abc,xyz"
+    last;
+  }
+  if (defined($de)) {
+    $de = $de . " " . $ARGV[$i];
+    $i++;
+    next;
+  }
+  if (defined($term)) {
+    $term = $term ." ". $ARGV[$i];
+  } else {
+    $term = $ARGV[$i];
+  }
+  $i++;
+}
+
 $term =~ s/^\s*//;
 $term =~ s/\s*$//;
+$term = uc $term;
+
+if (defined($de)) {
+  my $degeo = argToCoords($de);
+  ($mylat, $mylon) = split(',', $degeo) if defined $degeo;
+  $localgrid = coordToGrid($mylat, $mylon);
+}
 
 my $now = time;
 my $needCTY = 0;
 if ( ! -e $ctydat ) {
   $needCTY = 1;
 } else {
-  my (undef, undef, undef, undef, undef, undef, undef, $size, undef, $mtime, undef, undef, undef) = stat $mostwantedfile;
+  my (undef, undef, undef, undef, undef, undef, undef, $size, undef, $mtime, undef, undef, undef) = stat $ctydat;
   if (defined $mtime) {
     my $age = $now - $mtime;
     if ($age > $maxage or $size == 0) {
@@ -122,12 +159,15 @@ while (<CTYDAT>) {
 	$pattern = "^$prefix";
       }
 
+      # hack to deal with Gitmo; KG4xx = gitmo; KG4xxx = W4
+      $pattern = '^KG4[A-Z][A-Z]$' if $pattern eq "^KG4";
+
       $dxcc = $lastentity[7];
       $name = $lastentity[0];
       $cont = $lastentity[3];
       $lat = $lastentity[4];
-      $lon = $lastentity[5];
-      $tz = -1 * $lastentity[6];  # sign is reversed
+      $lon = -$lastentity[5]; # sign is reversed
+      $tz = -$lastentity[6];  # sign is reversed
 
       $dxccmap{uc $dxcc} = join('|', $length, $pattern, $prefix, $dxcc, $cq, $itu, $name, $cont, $lat, $lon, $tz);
       push @records, join('|', $length, $pattern, $prefix, $dxcc, $cq, $itu, $name, $cont, $lat, $lon, $tz);
@@ -185,7 +225,9 @@ while (<MW>) {
       $mostwantedByPrefix{"3B6"} = $rank;
       $mostwantedByName{"AGALEGA & ST. BRANDON"} = $rank;
     }
-
+    if ($name eq "VIET NAM") {
+      $mostwantedByName{"VIETNAM"} = $rank;
+    }
   }
 }
 close(MW);
@@ -210,6 +252,11 @@ if (defined $dxccmap{$term}) {
   print ": $cont CQ:$cq ITU:$itu";
   my $mw = $mostwantedByPrefix{uc($dxcc)} || $mostwantedByName{uc($name)};
   print " MW:" . $mw unless (!defined $mw);
+  if (defined($mylat)) {
+    my ($dist, $bearing) = distBearing($mylat, $mylon, $lat, $lon);
+    printf(" -- %.1f km, %.0f° from %s", $dist, $bearing, $localgrid);
+  }
+
   print "\n";
   exit 0;
 }
@@ -226,6 +273,10 @@ if (length($term) >= 3) {
       print ": $cont CQ:$cq ITU:$itu";
       my $mw = $mostwantedByPrefix{uc($dxcc)} || $mostwantedByName{uc($name)};
       print " MW:" . $mw unless (!defined $mw);
+      if (defined($mylat)) {
+        my ($dist, $bearing) = distBearing($mylat, $mylon, $lat, $lon);
+        printf(" -- %.1f km, %.0f° from %s", $dist, $bearing, $localgrid);
+      }
       print "\n";
       exit 0;
     }
@@ -244,7 +295,7 @@ foreach my $rec (@records) {
   #print "$prefix\n";
   my ($length, $pattern, $prefix, $dxcc, $cq, $itu, $name, $cont, $lat, $lon, $tz) = split /\|/,$rec;
 
-  if ($term =~ m/$pattern/) {
+  if ($term =~ m/$pattern/i) {
     #print "FOUND: $pattern\n";
     #print "$rec\n";
 
@@ -256,6 +307,10 @@ foreach my $rec (@records) {
     print ": $cont CQ:$cq ITU:$itu";
     my $mw = $mostwantedByPrefix{uc($dxcc)} || $mostwantedByName{uc($name)};
     print " MW:" . $mw unless (!defined $mw);
+    if (defined($mylat)) {
+      my ($dist, $bearing) = distBearing($mylat, $mylon, $lat, $lon);
+      printf(" -- %.1f km, %.0f° from %s", $dist, $bearing, $localgrid);
+    }
     print "\n";
     exit 0;
   }
@@ -272,7 +327,7 @@ sub scrapeMW {
   open(MWFILE, ">", $mostwantedfile) or die "Can't open for writing: $!";
 
   #print "$mwurl\n";
-  open (HTTP, '-|', "curl -s -k --max-time 4 --retry 1 '$mwurl'");
+  open (HTTP, '-|', "curl -s -k -L --max-time 4 --retry 1 '$mwurl'");
   binmode(HTTP, ":utf8");
   while(<HTTP>) {
     chomp;
@@ -299,7 +354,7 @@ sub updateCTY {
   my $updateUrl = undef;
 
   #print "$rssURL\n";
-  open (RSS, '-|', "curl -s -k --max-time 4 --retry 1 '$rssURL'");
+  open (RSS, '-|', "curl -s -k -L --max-time 4 --retry 1 '$rssURL'");
   binmode(RSS, ":utf8");
   while(<RSS>) {
     chomp;
@@ -317,7 +372,7 @@ sub updateCTY {
   $done = 0;
   if (defined $updateUrl) {
     #print "$updateUrl\n";
-    open (UPD, '-|', "curl -s -k --max-time 4 --retry 1 '$updateUrl'");
+    open (UPD, '-|', "curl -s -k -L --max-time 4 --retry 1 '$updateUrl'");
     binmode (UPD, ":utf8");
     while (<UPD>) {
       chomp;
@@ -334,7 +389,7 @@ sub updateCTY {
   if (defined $zipurl) {
     #print "$zipurl\n";
     my (undef, $tmpfile) = tempfile();
-    system "curl -s -k -o $tmpfile '$zipurl'";
+    system "curl -s -k -L -o $tmpfile '$zipurl'";
     system "unzip -p $tmpfile cty.dat > $ctydat";
     unlink $tmpfile
   } else {

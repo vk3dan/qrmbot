@@ -1,0 +1,206 @@
+#!/usr/bin/perl
+
+# coronavirus info for qrmbot
+# written by aa4jq
+
+use strict;
+use utf8;
+use feature 'unicode_strings';
+binmode(STDOUT, ":utf8");
+
+use File::Basename;
+use Cwd 'realpath';
+use lib dirname(realpath(__FILE__));
+use Util;
+use Colors;
+
+# disable "experimental" warning on smart match operator use
+no if $] >= 5.018, warnings => "experimental::smartmatch";
+
+if ($ARGV[0] =~ /about/i){
+  print "Current global coronavirus cases as reported by WHO and others. ";
+  print "Source: https://www.worldometers.info/coronavirus/coronavirus-cases\n";
+  exit 0;
+}
+
+# eggdrop doesn't split args on spaces
+@ARGV=split(' ', join(' ',@ARGV));
+
+my @interest;
+my @states;
+
+my @statesandterritories = ("AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE",
+  "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA",
+  "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND",
+  "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA",
+  "WV", "WI", "WY", "DC", "GU", "AS", "MP", "PR", "VI", "UM", "FM", "MH", "PW",
+  "AA", "AE", "AP");
+
+my $i = 0;
+while ($i <= $#ARGV) {
+  if ($ARGV[$i] =~ /^[A-Z][A-Z]$/i and uc $ARGV[$i] ~~ @statesandterritories) {
+    push @states, uc $ARGV[$i];
+  } else {
+    push @interest, lc $ARGV[$i];
+  }
+  $i++;
+}
+
+# not updating reliably
+#my $url = "https://raw.githubusercontent.com/alext234/coronavirus-stats/master/data/who-global-cases.csv";
+my $url = "https://www.worldometers.info/coronavirus/";
+my $params = 
+	"-eval 'set connection.receive_timeout = 10' " .
+	"-eval 'set connection.retries = 1' " .
+	"--dump";
+
+if ($#interest >= 0) {
+  my $found = 0;
+  my ($cty, $cty_total, $cty_newcases, $cty_deaths, $cty_newdeaths, $cty_recovered, $cty_active, $cty_serious);
+  my $in_country = 0;
+  my $in_table = 0;
+  open(HTTP, '-|', "curl -s -k '$url'");
+  binmode(HTTP, ":utf8");
+  while (<HTTP>) {
+#   print;
+    $in_table = 1 if /<table id="main_table_countries_today"/;
+    $in_table = 0 if m|</table>|;
+    $in_country = 1 if /<tr style="">/ and $in_table == 1;
+    if (not defined $cty and $in_country == 1) {
+      $cty = $1 if
+	m|<td style="font-weight: bold; font-size:15px; text-align:left;"><a class="mt_a" href="country/.*?">(.*?)</a></td>|;
+      $cty = $1 if not defined $cty and
+	m|<td style="font-weight: bold; font-size:15px; text-align:left;"><span style="color:#00B5F0; font-style:italic;\s*">(.*?)</span></td>|;
+      $cty = $1 if not defined $cty and
+	m|<td style="font-weight: bold; font-size:15px; text-align:left;">(.*?)</td>|;
+      $cty =~ s/ //g if defined $cty;
+    }
+
+    if (defined $cty and not defined $cty_total and
+	m|<td style="font-weight: bold; text-align:right">([0-9,]+)</td>|) {
+      $cty_total = $1;
+    }
+
+    if (defined $cty_total and not defined $cty_newcases and
+        m|<td style="font-weight: bold; text-align:right;background-color:#FFEEAA;">\s*([+0-9,]*)\s*</td>|) {
+      $cty_newcases = $1;
+    }
+    if (defined $cty_total and not defined $cty_newcases and
+        m|<td style="font-weight: bold; text-align:right;"></td>|) {
+      $cty_newcases = "";
+      next;
+    }
+
+    if (defined $cty_newcases and not defined $cty_deaths and
+	m|<td style="font-weight: bold; text-align:right;">\s*([0-9,]*)\s*</td>|) {
+      $cty_deaths = $1;
+    }
+
+    if (defined $cty_deaths and not defined $cty_newdeaths and
+      #m|<td style="font-weight: bold; text-align:right;background-color:red; color:white">\s*([+0-9,]*)\s*</td>|) {
+	m|^\s*text-align:right;background-color:red; color:white">\s*([+0-9,]*)\s*</td>|) {
+      $cty_newdeaths = $1;
+    }
+    if (defined $cty_deaths and not defined $cty_newdeaths and
+	m|<td style="font-weight: bold; text-align:right;"></td>|) {
+      $cty_newdeaths = "";
+    }
+
+    if (defined $cty_newdeaths and not defined $cty_recovered and
+	m|<td style="font-weight: bold; text-align:right">([0-9,]*)</td>|) {
+      $cty_recovered = $1;
+      next;
+    }
+
+    if (defined $cty_recovered and not defined $cty_active and
+	m|<td style="text-align:right;font-weight:bold;">([0-9,]*)</td>|) {
+      $cty_active = $1;
+      next;
+    }
+
+    if (defined $cty_active and not defined $cty_serious and
+	m|<td style="font-weight: bold; text-align:right">([0-9,]*)</td>|) {
+      $cty_serious = $1;
+      #print "$cty total $cty_total newcases: $cty_newcases deaths: $cty_deaths newdeaths: $cty_newdeaths recoverd: $cty_recovered active: $cty_active serious: $cty_serious\n";
+      next;
+    }
+
+    if ($in_country == 1 and m|</tr>|) {
+      $in_country = 0;
+      $cty_deaths = 0 if not defined $cty_deaths or $cty_deaths eq "";
+      $cty_recovered = 0 if not defined $cty_recovered or $cty_recovered eq "";
+      $cty_serious = 0 if not defined $cty_serious or $cty_serious eq "";
+      if ( lc $cty ~~ @interest ) {
+	print bold($cty), ": ", yellow($cty_total), " confirmed cases and ",
+	  red($cty_deaths), " deaths";
+	print "; ", yellow("$cty_newcases"), " new cases" if $cty_newcases ne "";
+	print "; ", red("$cty_newdeaths"), " new deaths" if $cty_newdeaths ne "";
+	print "; ", lightblue($cty_recovered), " total recovered." if $cty_recovered > 0;
+	print("\n");
+	$found = 1;
+      }
+      ($cty, $cty_total, $cty_newcases, $cty_deaths, $cty_newdeaths, $cty_recovered, $cty_active, $cty_serious) =
+	(undef, undef, undef, undef, undef, undef, undef, undef);
+    }
+  }
+  close(HTTP);
+  print "not found\n" if $found == 0;
+  exit 0 if ($#states == -1);
+}
+
+if ($#states >= 0) {
+  my $url = "https://covidtracking.com/api/states";
+  my $found = 0;
+  open(HTTP, '-|', "curl -s -k '$url' | sed -e 's/},{/},\\n{/g'");
+  binmode(HTTP, ":utf8");
+  while (<HTTP>) {
+    if (/"state":"([A-Z]{2})",.*?"positive":(\d+),.*?"negative":(\d+|null),.*?"pending":(\d+|null),.*?"hospitalizedCurrently":(\d+|null),.*?"recovered":(\d+|null).*?"death":(\d+|null),/) {
+      if ( uc $1 ~~ @states ) {
+	print "State ", bold($1)," Covid19 tests: positive: ", yellow(commify($2)), ", negative: ", green(commify($3));
+	print ", pending: ", commify($4) if $4 ne "null" and $4 > 0;
+	print ", hospitalized now: ", cyan(commify($5)) if $5 ne "null" and $5 > 0;
+	print ", recovered: ", lightblue(commify($6)) if $6 ne "null" and $6 > 0;
+	print ", deaths: ", red(commify($7)), "\n";
+	$found = 1;
+      }
+    }
+  }
+  close(HTTP);
+  print "not found\n" if $found == 0;
+  exit 0;
+}
+
+my $date;
+my ($incases, $indeaths, $inrecov) = (0, 0, 0);
+my ($c, $d, $r) = (0,0,0);
+system("curl -s -k '$url' > /tmp/c19-temp.html");
+open(HTTP, '-|', "elinks --dump /tmp/c19-temp.html");
+binmode(HTTP, ":utf8");
+while (<HTTP>) {
+  s/^\s*//;
+  s/\[\d+\]//g;
+
+  $date = "$1z" if /Last updated: (.*) GMT/;
+
+  $incases = 1 if /Coronavirus Cases:/;
+  $c = $1 if /^\s*([0-9,]+)\s*$/ and $incases == 1;
+  $c =~ s/,//g if $incases == 1;
+  $incases = 0 if $c != 0;
+
+  $indeaths = 1 if /Deaths:/;
+  $d = $1 if /^\s*([0-9,]+)\s*$/ and $indeaths == 1;
+  $d =~ s/,//g if $indeaths == 1;
+  $indeaths = 0 if $d != 0;
+
+  $inrecov = 1 if /Recovered:/;
+  $r = $1 if /^\s*([0-9,]+)\s*$/ and $inrecov == 1;
+  $r =~ s/,//g if $inrecov == 1;
+  $inrecov = 0 if $r != 0;
+}
+close(HTTP);
+
+my $pct = sprintf("%0.1f", ($d/($d+$r)*100.0));
+print "As of $date, there are ", yellow(commify($c)), " confirmed cases and ",
+  red(commify($d)), " deaths, with ", lightblue(commify($r)),
+  " recovered. Death rate ", red("$pct%"), " of resolved cases.\n";
+exit 0;

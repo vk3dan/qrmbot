@@ -5,9 +5,11 @@
 
 bind pub - !qrz qrz
 bind pub - !call qrz
+bind pub - !dox qrz
 
 bind msg - !qrz msg_qrz
 bind msg - !call msg_qrz
+bind msg - !dox msg_qrz
 
 bind pub - !setgeo qrz_setgeo_pub
 bind msg - !setgeo qrz_setgeo_msg
@@ -21,10 +23,18 @@ bind pub - !qth grid
 bind msg - !grid msg_grid
 bind msg - !qth msg_grid
 
+bind pub - !drive drive_pub
+bind msg - !drive drive_msg
+bind pub - !transit transit_pub
+bind msg - !transit transit_msg
+
 bind pub - !time timezone
 bind pub - !tz timezone
 bind msg - !time msg_timezone
 bind msg - !tz msg_timezone
+
+bind pub - !elev elev
+bind msg - !elev msg_elev
 
 bind pub - !bands bands
 bind msg - !bands msg_bands
@@ -36,6 +46,8 @@ bind pub - !solarforecast solarforecast
 bind msg - !solarforecast msg_solarforecast
 bind pub - !forecast solarforecast
 bind msg - !forecast msg_solarforecast
+bind pub - !longterm longtermforecast
+bind msg - !longterm msg_longtermforecast
 
 bind pub - !xray xray
 bind msg - !xray msg_xray
@@ -45,6 +57,11 @@ bind msg - !lotw msg_lotw
 
 bind pub - !eqsl eqsl
 bind msg - !eqsl msg_eqsl
+
+bind pub - !oqrs pub_clublog
+bind msg - !oqrs msg_clublog
+bind pub - !clublog pub_clublog
+bind msg - !clublog msg_clublog
 
 bind pub - !dxcc dxcc
 bind msg - !dxcc msg_dxcc
@@ -100,6 +117,8 @@ bind msg - !muf muf_msg
 bind pub - !muf muf_pub
 bind msg - !muf2 muf2_msg
 bind pub - !muf2 muf2_pub
+bind msg - !iono iono_msg
+bind pub - !iono iono_pub
 
 bind msg - !eme eme_msg
 bind pub - !eme eme_pub
@@ -112,20 +131,34 @@ bind pub - !graves graves_pub
 
 bind msg - !sat sat_msg
 bind pub - !sat sat_pub
+bind msg - !satpass satpass_msg
+bind pub - !satpass satpass_pub
+bind msg - !satinfo satinfo_msg
+bind pub - !satinfo satinfo_pub
 
 bind msg - !qcode qcode_msg
 bind pub - !qcode qcode_pub
 bind msg - !q qcode_msg
 bind pub - !q qcode_pub
 
+bind pub - !qsl qslcheck_pub
+bind msg - !qsl qslcheck_msg
+
+bind pub - !dxped dxpeditions_pub
+bind msg - !dxped dxpeditions_msg
+
 set qrzbin "/home/eggdrop/bin/qrz"
 set gridbin "/home/eggdrop/bin/grid"
+set drivebin "/home/eggdrop/bin/drivetime"
 set tzbin "/home/eggdrop/bin/timezone"
+set elevbin "/home/eggdrop/bin/elev"
 set bandsbin "/home/eggdrop/bin/bands"
 set xraybin "/home/eggdrop/bin/xray"
 set forecastbin "/home/eggdrop/bin/solarforecast"
+set longtermforecastbin "/home/eggdrop/bin/longtermforecast"
 set lotwbin "/home/eggdrop/bin/lotwcheck"
 set eqslbin "/home/eggdrop/bin/eqslcheck"
+set clublogbin "/home/eggdrop/bin/checkclublog"
 set dxccbin "/home/eggdrop/bin/dxcc"
 set spotsbin "/home/eggdrop/bin/spots"
 set contestsbin "/home/eggdrop/bin/contests"
@@ -136,10 +169,11 @@ set unmorsebin "/home/eggdrop/bin/unmorse"
 set repeaterbin "/home/eggdrop/bin/repeater"
 set aprsbin "/home/eggdrop/bin/aprs"
 set mufbin "/home/eggdrop/bin/muf"
-set muf2bin "/home/eggdrop/bin/muf2"
+set ionobin "/home/eggdrop/bin/iono"
 set astrobin "/home/eggdrop/bin/astro"
 set satbin "/home/eggdrop/bin/sat"
 set qcodebin "/home/eggdrop/bin/qcode"
+set dxpedbin "/home/eggdrop/bin/dxpeditions"
 
 set spotfile spotlist
 
@@ -155,17 +189,16 @@ proc qrz { nick host hand chan text } {
 	putlog "qrz pub: $nick $host $hand $chan $callsign $geo"
 
 	if [string equal "" $geo] then {
-		catch {exec ${qrzbin} ${callsign} --compact } data
+		set fd [open "|${qrzbin} ${callsign} --compact" r]
 	} else {
-		catch {exec ${qrzbin} ${callsign} --compact --geo $geo } data
+		set fd [open "|${qrzbin} ${callsign} --compact --geo $geo" r]
 	}
-
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
-
 
 proc msg_qrz {nick uhand handle input} {
 	global qrzbin
@@ -175,15 +208,15 @@ proc msg_qrz {nick uhand handle input} {
 	putlog "qrz msg: $nick $uhand $handle $callsign $geo"
 
 	if [string equal "" $geo] then {
-		catch {exec ${qrzbin} ${callsign}} data
+		set fd [open "|${qrzbin} ${callsign}" r]
 	} else {
-		catch {exec ${qrzbin} ${callsign} --geo $geo } data
+		set fd [open "|${qrzbin} ${callsign} --geo $geo " r]
 	}
-
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc qrz_setgeo_pub { nick host hand chan text } {
@@ -279,15 +312,15 @@ proc grid { nick host hand chan text } {
 	putlog "grid pub: $nick $host $hand $chan $grid $geo"
 
 	if [string equal "" $geo] then {
-		catch {exec ${gridbin} ${grid}} data
+		set fd [open "|${gridbin} ${grid}" r]
 	} else {
-		catch {exec ${gridbin} ${grid} --geo $geo } data
+		set fd [open "|${gridbin} ${grid} --geo $geo" r]
 	}
-
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
 
 
@@ -299,16 +332,93 @@ proc msg_grid {nick uhand handle input} {
 	putlog "grid msg: $nick $uhand $handle $grid $geo"
 
 	if [string equal "" $geo] then {
-		catch {exec ${gridbin} ${grid}} data
+		set fd [open "|${gridbin} ${grid}" r]
 	} else {
-		catch {exec ${gridbin} ${grid} --geo $geo } data
+		set fd [open "|${gridbin} ${grid} --geo $geo" r]
 	}
-
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
+
+proc drive_msg {nick uhand handle input} {
+	global drivebin
+	set grid [sanitize_string [string trim ${input}]]
+	set geo [qrz_getgeo $handle]
+
+	putlog "drive msg: $nick $uhand $handle $grid $geo"
+
+	if [string equal "" $geo] then {
+		set fd [open "|${drivebin} ${grid}" r]
+	} else {
+		set fd [open "|${drivebin} ${grid} --geo $geo" r]
+	}
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
+	}
+	close $fd
+}
+
+proc drive_pub { nick host hand chan text } {
+	global drivebin
+	set grid [sanitize_string [string trim ${text}]]
+	set geo [qrz_getgeo $hand]
+
+	putlog "drive pub: $nick $host $hand $chan $grid $geo"
+
+	if [string equal "" $geo] then {
+		set fd [open "|${drivebin} ${grid}" r]
+	} else {
+		set fd [open "|${drivebin} ${grid} --geo $geo" r]
+	}
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
+	}
+	close $fd
+}
+
+proc transit_msg {nick uhand handle input} {
+	global drivebin
+	set grid [sanitize_string [string trim ${input}]]
+	set geo [qrz_getgeo $handle]
+
+	putlog "transit msg: $nick $uhand $handle $grid $geo"
+
+	if [string equal "" $geo] then {
+		set fd [open "|${drivebin} --transit ${grid}" r]
+	} else {
+		set fd [open "|${drivebin} --transit ${grid} --geo $geo" r]
+	}
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
+	}
+	close $fd
+}
+
+proc transit_pub { nick host hand chan text } {
+	global drivebin
+	set grid [sanitize_string [string trim ${text}]]
+	set geo [qrz_getgeo $hand]
+
+	putlog "transit pub: $nick $host $hand $chan $grid $geo"
+
+	if [string equal "" $geo] then {
+		set fd [open "|${drivebin} --transit ${grid}" r]
+	} else {
+		set fd [open "|${drivebin} --transit ${grid} --geo $geo" r]
+	}
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
+	}
+	close $fd
+}
+
 
 proc timezone { nick host hand chan text } {
 	global tzbin
@@ -318,15 +428,15 @@ proc timezone { nick host hand chan text } {
 	putlog "timezone pub: $nick $host $hand $chan $timezone $geo"
 
 	if [string equal "" $geo] then {
-		catch {exec ${tzbin} ${timezone}} data
+		set fd [open "|${tzbin} ${timezone}" r]
 	} else {
-		catch {exec ${tzbin} ${timezone} --geo $geo } data
+		set fd [open "|${tzbin} ${timezone} --geo $geo" r]
 	}
-
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
 
 
@@ -338,176 +448,298 @@ proc msg_timezone {nick uhand handle input} {
 	putlog "timezone msg: $nick $uhand $handle $timezone $geo"
 
 	if [string equal "" $geo] then {
-		catch {exec ${tzbin} ${timezone}} data
+		set fd [open "|${tzbin} ${timezone}" r]
 	} else {
-		catch {exec ${tzbin} ${timezone} --geo $geo } data
+		set fd [open "|${tzbin} ${timezone} --geo $geo " r]
 	}
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
+	}
+	close $fd
+}
 
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+proc elev { nick host hand chan text } {
+	global elevbin
+	set elev [sanitize_string [string trim ${text}]]
+	set geo [qrz_getgeo $hand]
+
+	putlog "elev pub: $nick $host $hand $chan $elev $geo"
+
+	if [string equal "" $geo] then {
+		set fd [open "|${elevbin} ${elev}" r]
+	} else {
+		set fd [open "|${elevbin} ${elev} --geo $geo " r]
 	}
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
+	}
+	close $fd
+}
+
+
+proc msg_elev {nick uhand handle input} {
+	global elevbin
+	set elev [sanitize_string [string trim ${input}]]
+	set geo [qrz_getgeo $handle]
+
+	putlog "elev msg: $nick $uhand $handle $elev $geo"
+
+	if [string equal "" $geo] then {
+		set fd [open "|${elevbin} ${elev}" r]
+	} else {
+		set fd [open "|${elevbin} ${elev} --geo $geo " r]
+	}
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
+	}
+	close $fd
 }
 
 
 proc bands { nick host hand chan text } {
 	global bandsbin
 	putlog "bands pub: $nick $host $hand $chan $text"
-	catch {exec ${bandsbin}} data
-	set output [split $data "\n"]
-	foreach line $output {
+	set fd [open "|${bandsbin}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		putchan $chan "$line"
 	}
+	close $fd
 }
 
 proc msg_bands {nick uhand handle input} {
 	global bandsbin
 	putlog "bands msg: $nick $uhand $handle $input"
-	catch {exec ${bandsbin}} data
-	set output [split $data "\n"]
-	foreach line $output {
+	set fd [open "|${bandsbin}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		putmsg $nick "$line"
 	}
+	close $fd
 }
 ##
 proc solar { nick host hand chan text } {
 	global bandsbin
 	putlog "solar pub: $nick $host $hand $chan $text"
-	catch {exec ${bandsbin} "-q"} data
-	set output [split $data "\n"]
-	foreach line $output {
+	set fd [open "|${bandsbin} -q" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		putchan $chan "$line"
 	}
+	close $fd
 }
 
 proc msg_solar {nick uhand handle input} {
 	global bandsbin
 	putlog "solar msg: $nick $uhand $handle $input"
-	catch {exec ${bandsbin} "-q"} data
-	set output [split $data "\n"]
-	foreach line $output {
+	set fd [open "|${bandsbin} -q" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		putmsg $nick "$line"
 	}
+	close $fd
 }
 ##
 proc solarforecast { nick host hand chan text } {
 	global forecastbin
-	catch {exec ${forecastbin} } data
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	putlog "forecast pub: $nick $host $hand $chan $text"
+	set fd [open "|${forecastbin} " r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
 
 proc msg_solarforecast {nick uhand handle input} {
 	global forecastbin
-	catch {exec ${forecastbin} } data
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	putlog "forecast msg: $nick $uhand $handle $input"
+	set fd [open "|${forecastbin} " r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
+}
+
+proc longtermforecast { nick host hand chan text } {
+	global longtermforecastbin
+	putlog "longterm pub: $nick $host $hand $chan $text"
+	set fd [open "|${longtermforecastbin} " r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
+		#putmsg $nick "$line"
+	}
+	close $fd
+}
+
+proc msg_longtermforecast {nick uhand handle input} {
+	global longtermforecastbin
+	putlog "longterm msg: $nick $uhand $handle $input"
+	set fd [open "|${longtermforecastbin} " r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
+	}
+	close $fd
 }
 
 proc xray { nick host hand chan text } {
 	global xraybin
-	catch {exec ${xraybin} } data
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	putlog "xray pub: $nick $host $hand $chan $text"
+	set fd [open "|${xraybin} " r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
 
 proc msg_xray {nick uhand handle input} {
 	global xraybin
-	catch {exec ${xraybin} } data
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	putlog "xray msg: $nick $uhand $handle $input"
+	set fd [open "|${xraybin} " r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc lotw { nick host hand chan text } {
 	global lotwbin
 	set call [sanitize_string [string trim ${text}]]
 	putlog "lotw pub: $nick $host $hand $chan $call"
-	catch {exec ${lotwbin} ${call}} data
-	set output [split $data "\n"]
-	foreach line $output {
+	set fd [open "|${lotwbin} ${call}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		putchan $chan "$line"
 	}
+	close $fd
 }
 proc msg_lotw {nick uhand handle input} {
 	global lotwbin
 	set call [sanitize_string [string trim ${input}]]
 	putlog "lotw msg: $nick $uhand $handle $call"
-	catch {exec ${lotwbin} ${call}} data
-	set output [split $data "\n"]
-	foreach line $output {
+	set fd [open "|${lotwbin} ${call}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc eqsl { nick host hand chan text } {
 	global eqslbin
 	set call [sanitize_string [string trim ${text}]]
 	putlog "eqsl pub: $nick $host $hand $chan $call"
-	catch {exec ${eqslbin} ${call}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	set fd [open "|${eqslbin} ${call}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
 proc msg_eqsl {nick uhand handle input} {
 	global eqslbin
 	set call [sanitize_string [string trim ${input}]]
 	putlog "eqsl msg: $nick $uhand $handle $call"
-	catch {exec ${eqslbin} ${call}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	set fd [open "|${eqslbin} ${call}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
+
+proc pub_clublog { nick host hand chan text } {
+	global clublogbin
+	set call [sanitize_string [string trim ${text}]]
+	putlog "clublog pub: $nick $host $hand $chan $call"
+	set fd [open "|${clublogbin} ${call}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
+	}
+	close $fd
+}
+proc msg_clublog {nick uhand handle input} {
+	global clublogbin
+	set call [sanitize_string [string trim ${input}]]
+	putlog "clublog msg: $nick $uhand $handle $call"
+	set fd [open "|${clublogbin} ${call}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
+	}
+	close $fd
+}
+
 
 proc dxcc { nick host hand chan text } {
 	global dxccbin
 	set call [sanitize_string [string trim ${text}]]
+	set geo [qrz_getgeo $hand]
+
 	putlog "dxcc pub: $nick $host $hand $chan $call"
-	catch {exec ${dxccbin} ${call}} data
-	set output [split $data "\n"]
-	foreach line $output {
+
+	if [string equal "" $geo] then {
+		set fd [open "|${dxccbin} ${call}" r]
+	} else {
+		set fd [open "|${dxccbin} ${call} --geo $geo" r]
+	}
+
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		putchan $chan "$line"
 	}
+	close $fd
 }
 proc msg_dxcc {nick uhand handle input} {
 	global dxccbin
 	set call [sanitize_string [string trim ${input}]]
+	set geo [qrz_getgeo $handle]
+
 	putlog "dxcc msg: $nick $uhand $handle $call"
-	catch {exec ${dxccbin} ${call}} data
-	set output [split $data "\n"]
-	foreach line $output {
+
+	if [string equal "" $geo] then {
+		set fd [open "|${dxccbin} ${call}" r]
+	} else {
+		set fd [open "|${dxccbin} ${call} --geo $geo" r]
+	}
+
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc spots { nick host hand chan text } {
 	global spotsbin
 	set input [sanitize_string [string trim ${text}]]
 	putlog "spots pub: $nick $host $hand $chan $input"
-	catch {exec ${spotsbin} ${input}} data
-	set output [split $data "\n"]
-	foreach line $output {
+	set fd [open "|${spotsbin} ${input}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		putchan $chan "$line"
 	}
+	close $fd
 }
 proc msg_spots {nick uhand handle input} {
 	global spotsbin
 	set input [sanitize_string [string trim ${input}]]
 	putlog "spots msg: $nick $uhand $handle $input"
-	catch {exec ${spotsbin} ${input}} data
-	set output [split $data "\n"]
-	foreach line $output {
+	set fd [open "|${spotsbin} ${input}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 
@@ -848,196 +1080,197 @@ proc utc_msg {nick uhand handle input} {
 proc contests { nick host hand chan text } {
 	global contestsbin
 	putlog "contests pub: $nick $host $hand $chan $text"
-	catch {exec ${contestsbin}} data
-	set output [split $data "\n"]
-	foreach line $output {
+	set fd [open "|${contestsbin}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		putchan $chan "$line"
 	}
+	close $fd
 }
 proc contests_msg {nick uhand handle input} {
 	global contestsbin
 	putlog "contests msg: $nick $uhand $handle $input"
-	catch {exec ${contestsbin}} data
-	set output [split $data "\n"]
-	foreach line $output {
+	set fd [open "|${contestsbin}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc activity { nick host hand chan text } {
 	global activitybin
 	set params [sanitize_string [string trim ${text}]]
 	putlog "activity pub: $nick $host $hand $chan $params"
-	catch {exec ${activitybin} ${params}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	set fd [open "|${activitybin} ${params}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
 proc activity_msg {nick uhand handle input} {
 	global activitybin
 	set params [sanitize_string [string trim ${input}]]
 	putlog "activity msg: $nick $uhand $handle $params"
-	catch {exec ${activitybin} ${params}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	set fd [open "|${activitybin} ${params}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc kindex { nick host hand chan text } {
 	global kindexbin
 	putlog "kindex pub: $nick $host $hand $chan $text"
-	catch {exec ${kindexbin}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	set fd [open "|${kindexbin}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
 proc kindex_msg {nick uhand handle input} {
 	global kindexbin
 	putlog "kindex msg: $nick $uhand $handle $input"
-	catch {exec ${kindexbin}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	set fd [open "|${kindexbin}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc morse_pub { nick host hand chan text } {
 	global morsebin
 	set msg [sanitize_string [string trim ${text}]]
 	putlog "morse pub: $nick $host $hand $chan $msg"
-	catch {exec ${morsebin} ${msg}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	set fd [open "|${morsebin} ${msg}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
 proc morse_msg {nick uhand handle input} {
 	global morsebin
 	set msg [sanitize_string [string trim ${input}]]
 	putlog "morse msg: $nick $uhand $handle $msg"
-	catch {exec ${morsebin} ${msg}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	set fd [open "|${morsebin} ${msg}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc unmorse_pub { nick host hand chan text } {
 	global unmorsebin
 	set msg [sanitize_string [string trim ${text}]]
 	putlog "unmorse pub: $nick $host $hand $chan $msg"
-	catch {exec ${unmorsebin} ${msg}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	set fd [open "|${unmorsebin} ${msg}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
 proc unmorse_msg {nick uhand handle input} {
 	global unmorsebin
 	set msg [sanitize_string [string trim ${input}]]
 	putlog "unmorse msg: $nick $uhand $handle $msg"
-	catch {exec ${unmorsebin} ${msg}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	set fd [open "|${unmorsebin} ${msg}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc repeater_pub { nick host hand chan text } {
 	global repeaterbin
 	set msg [sanitize_string [string trim ${text}]]
 	putlog "repeater pub: $nick $host $hand $chan $msg"
-	catch {exec ${repeaterbin} ${msg}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	set fd [open "|${repeaterbin} ${msg}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
 proc repeater_msg {nick uhand handle input} {
 	global repeaterbin
 	set msg [sanitize_string [string trim ${input}]]
 	putlog "repeater msg: $nick $uhand $handle $msg"
-	catch {exec ${repeaterbin} ${msg}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	set fd [open "|${repeaterbin} ${msg}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc aprs_pub { nick host hand chan text } {
 	global aprsbin
 	set params [sanitize_string [string trim ${text}]]
 	putlog "aprs pub: $nick $host $hand $chan $params"
-	catch {exec ${aprsbin} ${params}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	set fd [open "|${aprsbin} ${params}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
 proc aprs_msg {nick uhand handle input} {
 	global aprsbin
 	set params [sanitize_string [string trim ${input}]]
 	putlog "aprs msg: $nick $uhand $handle $params"
-	catch {exec ${aprsbin} ${params}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	set fd [open "|${aprsbin} ${params}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc muf_pub { nick host hand chan text } {
 	global mufbin
 	set params [sanitize_string [string trim ${text}]]
 	putlog "muf pub: $nick $host $hand $chan $params"
-	catch {exec ${mufbin} ${params}} data
-	set output [split $data "\n"]
-	foreach line $output {
+	set fd [open "|${mufbin} ${params}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		# list via msg
 		if [string equal "list" $params] then {
-			putmsg $nick [encoding convertto utf-8 "$line"]
+			putmsg $nick "$line"
 		} else {
-			putchan $chan [encoding convertto utf-8 "$line"]
+			putchan $chan "$line"
 		}
 	}
+	close $fd
 }
 proc muf_msg {nick uhand handle input} {
 	global mufbin
 	set params [sanitize_string [string trim ${input}]]
 	putlog "muf msg: $nick $uhand $handle $params"
-	catch {exec ${mufbin} ${params}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	set fd [open "|${mufbin} ${params}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc muf2_pub { nick host hand chan text } {
-	global muf2bin
 	set params [sanitize_string [string trim ${text}]]
 	putlog "muf2 pub: $nick $host $hand $chan $params"
-	catch {exec ${muf2bin} ${params}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		# list via msg
-		if [string equal "list" $params] then {
-			putmsg $nick [encoding convertto utf-8 "$line"]
-		} else {
-			putchan $chan [encoding convertto utf-8 "$line"]
-		}
-	}
+	putchan $chan "$nick: please use !muf"
 }
 proc muf2_msg {nick uhand handle input} {
-	global muf2bin
 	set params [sanitize_string [string trim ${input}]]
 	putlog "muf2 msg: $nick $uhand $handle $params"
-	catch {exec ${muf2bin} ${params}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
-	}
+	putmsg $nick "please use !muf"
 }
 
 proc eme_pub { nick host hand chan text } {
@@ -1046,14 +1279,15 @@ proc eme_pub { nick host hand chan text } {
 	set geo [qrz_getgeo $hand]
 	putlog "eme pub: $nick $host $hand $chan $geo $params"
 	if {(( [string equal "" $geo] ) || !( [string equal "" $params] ) || ( $params != {} ))} then {
-		catch {exec ${astrobin} --eme ${params}} data
+		set fd [open "|${astrobin} --eme ${params}" r]
 	} else {
-		catch {exec ${astrobin} --eme ${geo} ${params}} data
+		set fd [open "|${astrobin} --eme ${geo} ${params}" r]
 	}
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
 proc eme_msg {nick uhand handle input} {
 	global astrobin
@@ -1061,14 +1295,15 @@ proc eme_msg {nick uhand handle input} {
 	set geo [qrz_getgeo $handle]
 	putlog "eme msg: $nick $uhand $handle $geo $params"
 	if {(( [string equal "" $geo] ) || !( [string equal "" $params] ) || ( $params != {} ))} then {
-		catch {exec ${astrobin} --eme ${params}} data
+		set fd [open "|${astrobin} --eme ${params}" r]
 	} else {
-		catch {exec ${astrobin} --eme ${geo} ${params}} data
+		set fd [open "|${astrobin} --eme ${geo} ${params}" r]
 	}
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc moon_pub { nick host hand chan text } {
@@ -1077,14 +1312,15 @@ proc moon_pub { nick host hand chan text } {
 	set geo [qrz_getgeo $hand]
 	putlog "moon pub: $nick $host $hand $chan $geo $params"
 	if {(( [string equal "" $geo] ) || !( [string equal "" $params] ) || ( $params != {} ))} then {
-		catch {exec ${astrobin} --moon ${params}} data
+		set fd [open "|${astrobin} --moon ${params}" r]
 	} else {
-		catch {exec ${astrobin} --moon ${geo} ${params}} data
+		set fd [open "|${astrobin} --moon ${geo} ${params}" r]
 	}
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
 proc moon_msg {nick uhand handle input} {
 	global astrobin
@@ -1092,14 +1328,15 @@ proc moon_msg {nick uhand handle input} {
 	set geo [qrz_getgeo $handle]
 	putlog "moon msg: $nick $uhand $handle $geo $params"
 	if {(( [string equal "" $geo] ) || !( [string equal "" $params] ) || ( $params != {} ))} then {
-		catch {exec ${astrobin} --moon ${params}} data
+		set fd [open "|${astrobin} --moon ${params}" r]
 	} else {
-		catch {exec ${astrobin} --moon ${geo} ${params}} data
+		set fd [open "|${astrobin} --moon ${geo} ${params}" r]
 	}
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc sun_pub { nick host hand chan text } {
@@ -1108,14 +1345,15 @@ proc sun_pub { nick host hand chan text } {
 	set geo [qrz_getgeo $hand]
 	putlog "sun pub: $nick $host $hand $chan $geo $params"
 	if {(( [string equal "" $geo] ) || !( [string equal "" $params] ) || ( $params != {} ))} then {
-		catch {exec ${astrobin} --sun ${params}} data
+		set fd [open "|${astrobin} --sun ${params}" r]
 	} else {
-		catch {exec ${astrobin} --sun ${geo} ${params}} data
+		set fd [open "|${astrobin} --sun ${geo} ${params}" r]
 	}
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
 proc sun_msg {nick uhand handle input} {
 	global astrobin
@@ -1123,35 +1361,38 @@ proc sun_msg {nick uhand handle input} {
 	set geo [qrz_getgeo $handle]
 	putlog "sun msg: $nick $uhand $handle $geo $params"
 	if {(( [string equal "" $geo] ) || !( [string equal "" $params] ) || ( $params != {} ))} then {
-		catch {exec ${astrobin} --sun ${params}} data
+		set fd [open "|${astrobin} --sun ${params}" r]
 	} else {
-		catch {exec ${astrobin} --sun ${geo} ${params}} data
+		set fd [open "|${astrobin} --sun ${geo} ${params}" r]
 	}
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc graves_pub { nick host hand chan text } {
 	global astrobin
 	set params [sanitize_string [string trim ${text}]]
 	putlog "graves pub: $nick $host $hand $chan $params"
-	catch {exec ${astrobin} --graves ${params}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putchan $chan [encoding convertto utf-8 "$line"]
+	set fd [open "|${astrobin} --graves ${params}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
 	}
+	close $fd
 }
 proc graves_msg {nick uhand handle input} {
 	global astrobin
 	set params [sanitize_string [string trim ${input}]]
 	putlog "graves msg: $nick $uhand $handle $params"
-	catch {exec ${astrobin} --graves ${params}} data
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	set fd [open "|${astrobin} --graves ${params}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
 }
 
 proc sat_pub { nick host hand chan text } {
@@ -1160,19 +1401,20 @@ proc sat_pub { nick host hand chan text } {
 	set geo [qrz_getgeo $hand]
 	putlog "sat pub: $nick $host $hand $chan $geo $params"
 	if {(( [string equal "" $geo] )  )} then {
-		catch {exec ${satbin} ${params}} data
+		set fd [open "|${satbin} ${params}" r]
 	} else {
-		catch {exec ${satbin} ${params} ${geo}} data
+		set fd [open "|${satbin} ${params} --geo ${geo}" r]
 	}
-	set output [split $data "\n"]
-	foreach line $output {
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		# list via msg
 		if [string equal "list" $params] then {
-			putmsg $nick [encoding convertto utf-8 "$line"]
+			putmsg $nick "$line"
 		} else {
-			putchan $chan [encoding convertto utf-8 "$line"]
+			putchan $chan "$line"
 		}
 	}
+	close $fd
 }
 proc sat_msg {nick uhand handle input} {
 	global satbin
@@ -1180,35 +1422,149 @@ proc sat_msg {nick uhand handle input} {
 	set geo [qrz_getgeo $handle]
 	putlog "sat msg: $nick $uhand $handle $geo $params"
 	if {(( [string equal "" $geo] ))} then {
-		catch {exec ${satbin} ${params}} data
+		set fd [open "|${satbin} ${params}" r]
 	} else {
-		catch {exec ${satbin} ${params} ${geo}} data
+		set fd [open "|${satbin} ${params} --geo ${geo}" r]
 	}
-	set output [split $data "\n"]
-	foreach line $output {
-		putmsg $nick [encoding convertto utf-8 "$line"]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
 	}
+	close $fd
+}
+proc satpass_msg {nick uhand handle input} {
+	sat_msg $nick $uhand $handle "--pass $input"
+}
+proc satinfo_msg {nick uhand handle input} {
+	sat_msg $nick $uhand $handle "--info $input"
+}
+proc satpass_pub { nick host hand chan text } {
+	sat_pub $nick $host $hand $chan "--pass $text"
+}
+proc satinfo_pub { nick host hand chan text } {
+	sat_pub $nick $host $hand $chan "--info $text"
 }
 
 proc qcode_pub { nick host hand chan text } {
 	global qcodebin
 	set msg [sanitize_string [string trim ${text}]]
 	putlog "qcode pub: $nick $host $hand $chan $msg"
-	catch {exec ${qcodebin} ${msg}} data
-	set output [split $data "\n"]
-	foreach line $output {
+	set fd [open "|${qcodebin} ${msg}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		putchan $chan "$line"
 	}
+	close $fd
 }
 proc qcode_msg {nick uhand handle input} {
 	global qcodebin
 	set msg [sanitize_string [string trim ${input}]]
 	putlog "qcode msg: $nick $uhand $handle $msg"
-	catch {exec ${qcodebin} ${msg}} data
-	set output [split $data "\n"]
-	foreach line $output {
+	set fd [open "|${qcodebin} ${msg}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
 		putmsg $nick "$line"
 	}
+	close $fd
+}
+
+proc qslcheck_pub { nick host hand chan text } {
+     qslcheck_msg "$nick" "$host" "$hand" "$text"
+}
+proc qslcheck_msg {nick uhand handle input} {
+	msg_qrz     "$nick" "$uhand" "$handle" "$input"
+	msg_lotw    "$nick" "$uhand" "$handle" "^$input$"
+	msg_eqsl    "$nick" "$uhand" "$handle" "$input"
+	msg_clublog "$nick" "$uhand" "$handle" "$input"
+}
+
+proc dxpeditions_pub { nick host hand chan text } {
+	global dxpedbin
+	set params [sanitize_string [string trim ${text}]]
+	putlog "dxped pub: $nick $host $hand $chan $params"
+	set fd [open "|${dxpedbin}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
+	}
+	close $fd
+}
+proc dxpeditions_msg {nick uhand handle input} {
+	global dxpedbin
+	set params [sanitize_string [string trim ${input}]]
+	putlog "dxped msg: $nick $uhand $handle $params"
+	set fd [open "|${dxpedbin}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
+	}
+	close $fd
+}
+
+proc iono_pub { nick host hand chan text } {
+	global ionobin
+	set iono [sanitize_string [string trim ${text}]]
+	set geo [qrz_getgeo $hand]
+
+	putlog "iono pub: $nick $host $hand $chan $iono $geo"
+
+	if [string equal "" $geo] then {
+		set fd [open "|${ionobin} ${iono}" r]
+	} else {
+		set fd [open "|${ionobin} ${iono} --geo $geo" r]
+	}
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
+	}
+	close $fd
+}
+
+
+proc iono_msg {nick uhand handle input} {
+	global ionobin
+	set iono [sanitize_string [string trim ${input}]]
+	set geo [qrz_getgeo $handle]
+
+	putlog "iono msg: $nick $uhand $handle $iono $geo"
+
+	if [string equal "" $geo] then {
+		set fd [open "|${ionobin} ${iono}" r]
+	} else {
+		set fd [open "|${ionobin} ${iono} --geo $geo" r]
+	}
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
+	}
+	close $fd
+}
+
+set ae7qbin "/home/eggdrop/bin/ae7q"
+bind pub - !ae7q pub_ae7q
+bind msg - !ae7q msg_ae7q
+
+proc pub_ae7q { nick host hand chan text } {
+	global ae7qbin
+	set input [sanitize_string [string trim ${text}]]
+	putlog "ae7q pub: $nick $host $hand $chan $input"
+	set fd [open "|${ae7qbin} ${input}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putchan $chan "$line"
+	}
+	close $fd
+}
+proc msg_ae7q {nick uhand handle input} {
+	global ae7qbin
+	set input [sanitize_string [string trim ${input}]]
+	putlog "ae7q msg: $nick $uhand $handle $input"
+	set fd [open "|${ae7qbin} ${input}" r]
+	fconfigure $fd -encoding utf-8
+	while {[gets $fd line] >= 0} {
+		putmsg $nick "$line"
+	}
+	close $fd
 }
 
 putlog "Ham utils loaded."

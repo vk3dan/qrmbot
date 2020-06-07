@@ -1,0 +1,273 @@
+#!/usr/bin/perl
+
+use strict;
+use utf8;
+use feature 'unicode_strings';
+binmode(STDOUT, ":utf8");
+
+use POSIX qw(strftime);
+use File::Basename;
+use Cwd 'realpath';
+use lib dirname(realpath(__FILE__));
+use Colors;
+
+my $url = "https://services.swpc.noaa.gov/text/predicted-sunspot-radio-flux.txt";
+
+my ($datestamp, $lastmonth, $firstmonth);
+my (%sfi, %sn);
+my $maxsfi = -1.0;
+my $minsfi = 10000000.0;
+my $maxsn = -1.0;
+my $minsn = 10000.0;
+my $count = 0;
+
+#open (HTTP, '-|', "curl -L -k -s $url");
+#binmode(HTTP, ":utf8");
+#while (<HTTP>) {
+while (0) {
+  $datestamp = $1 if /^:Created:\s*(.*)$/;
+  if (/^20/) {
+    my ($y, $m, $spots, undef, undef, $flux, undef, undef) = split(/\s+/);
+    $count++;
+    if ($spots ne -1) {
+      $sn{"$y-$m"} = $spots;
+      $maxsn = $spots if $spots > $maxsn;
+      $minsn = $spots if $spots < $minsn;
+    }
+    if ($flux ne -1) {
+      $sfi{"$y-$m"} = $flux;
+      $maxsfi = $flux if $flux > $maxsfi;
+      $minsfi = $flux if $flux < $minsfi;
+    }
+    $firstmonth = "$y-$m" if not defined $firstmonth;
+    $lastmonth = "$y-$m";
+  }
+}
+close HTTP;
+
+#print "NOAA Monthly forecast as of: $datestamp; $firstmonth to $lastmonth\n";
+##print "Max SFI: $maxsfi; Min SFI: $minsfi\n";
+##print "Max SN $maxsn; Min SN $minsn\n";
+
+#printf "     %s\n", yearMarkers(sort keys %sfi);
+#printf "SFI: %s : $minsfi-$maxsfi\n", join("", sfiToColorBlocks($minsfi, $maxsfi, \%sfi));
+#printf "SN:  %s : $minsn-$maxsn\n", join("", snToColorBlocks($minsn, $maxsn, \%sn));
+
+
+my $currmonth = lc strftime("%b%Y", gmtime time);
+my $prevmonth = lc strftime("%b%Y", gmtime time - 30*24*60*60);
+$url = "https://www.nasa.gov/sites/default/files/atoms/files/${currmonth}f10_prd.txt";
+my $url2 = "https://www.nasa.gov/sites/default/files/atoms/files/${prevmonth}f10_prd.txt";
+my (%sfi, %ap);
+$maxsfi = -1.0;
+$minsfi = 10000000.0;
+my $maxap = -1.0;
+my $minap = 10000.0;
+$count = 0;
+$firstmonth = undef;
+my $firstyear = undef;
+
+open (HTTP, '-|', "curl -L -k -s -f $url $url2");
+binmode(HTTP, ":utf8");
+while (<HTTP>) {
+  if (/^\s*20/) {
+    my (undef, $y, $m, undef, $flux, undef, undef, $apindex) = split(/\s+/);
+    $count++;
+
+    $y =~ s/\.[0-9]+$//;
+    $firstyear = $y if not defined $firstyear;
+    next if $y > $firstyear + 3; # truncate the forecast to 3 years
+    $m = monToNum($m);
+    $firstmonth = "$y-$m" if not defined $firstmonth;
+    $lastmonth = "$y-$m";
+
+    $sfi{"$y-$m"} = $flux;
+    $maxsfi = $flux if $flux > $maxsfi;
+    $minsfi = $flux if $flux < $minsfi;
+
+    $ap{"$y-$m"} = $apindex;
+    $maxap = $apindex if $apindex > $maxap;
+    $minap = $apindex if $apindex < $minap;
+  }
+}
+close HTTP;
+
+print "NASA Monthly forecast as of: $currmonth; $firstmonth to $lastmonth\n";
+
+printf "     %s\n", yearMarkers(sort keys %sfi);
+printf "SFI: %s : $minsfi-$maxsfi\n", join("", sfiToColorBlocks($minsfi, $maxsfi, \%sfi));
+printf "AP:  %s : $minap-$maxap\n", join("", apToColorBlocks($minap, $maxap, \%ap));
+
+# SFI   < 80: dark red
+# SFI  81-94: red
+# SFI 95-119: yellow
+# SFI  > 120: green
+sub sfiToColorBlocks {
+
+  my $minsfi = shift;
+  my $maxsfi = shift;
+  my $hashref = shift;
+  my %sfi = %$hashref;
+
+  my $chr = undef;
+  my @result;
+
+  foreach my $k (sort(keys(%sfi))) {
+    my $v = $sfi{$k};
+
+    $chr = valToBlock($v, $minsfi, $maxsfi);
+
+    # year boundary
+    push @result,"|" if ($k =~ /-01$/);
+
+    if ($v < 81.0) {
+      push @result, darkRed($chr);
+    } elsif ($v < 95.0) {
+      push @result, red($chr);
+    } elsif ($v < 120.0) {
+      push @result, yellow($chr);
+    } else {
+      push @result, green($chr);
+    }
+  }
+  return @result;
+}
+
+# SN   < 16: dark red
+# SN  17-36: red
+# SN  37-64 yellow
+# SN  > 65 green
+sub snToColorBlocks {
+
+  my $minsn = shift;
+  my $maxsn = shift;
+  my $hashref = shift;
+  my %sn = %$hashref;
+
+  my $chr = undef;
+  my @result;
+
+  foreach my $k (sort(keys(%sn))) {
+    my $v = $sn{$k};
+
+    $chr = valToBlock($v, $minsn, $maxsn);
+
+    # year boundary
+    push @result,"|" if ($k =~ /-01$/);
+
+    if ($v < 16.0) {
+      push @result, darkRed($chr);
+    } elsif ($v < 37.0) {
+      push @result, red($chr);
+    } elsif ($v < 65.0) {
+      push @result, yellow($chr);
+    } else {
+      push @result, green($chr);
+    }
+  }
+  return @result;
+}
+
+#   colors from: http://www.swpc.noaa.gov/products/station-k-and-indices
+# Aindex  < 20: green
+# Aindex 20-29: yellow
+# Aindex 30-49: red
+# Aindex 50-99: dark red
+# Aindex > 100: light blue
+sub apToColorBlocks {
+
+  my $minsfi = shift;
+  my $maxsfi = shift;
+  my $hashref = shift;
+  my %sfi = %$hashref;
+
+  my $chr = undef;
+  my @result;
+
+  foreach my $k (sort(keys(%sfi))) {
+    my $v = $sfi{$k};
+
+    $chr = valToBlock($v, $minsfi, $maxsfi);
+
+    # year boundary
+    push @result,"|" if ($k =~ /-01$/);
+
+    if ($v < 20.0) {
+      push @result, green($chr);
+    } elsif ($v < 30.0) {
+      push @result, yellow($chr);
+    } elsif ($v < 50.0) {
+      push @result, red($chr);
+    } elsif ($v < 100.0) {
+      push @result, darkRed($chr);
+    } else {
+      push @result, blue($chr);
+    }
+  }
+  return @result;
+}
+
+# relative to min/max
+sub valToBlock {
+  my $v = shift;
+  my $min = shift;
+  my $max = shift;
+  my $step = ($max - $min)/8;
+  my $chr = " ";
+
+  if ($v <= ($min + ($step * 1))) {
+    $chr = "▁";
+  } elsif ($v <= ($min + ($step * 2))) {
+    $chr = "▂";
+  } elsif ($v <= ($min + ($step * 3))) {
+    $chr = "▃";
+  } elsif ($v <= ($min + ($step * 4))) {
+    $chr = "▄";
+  } elsif ($v <= ($min + ($step * 5))) {
+    $chr = "▅";
+  } elsif ($v <= ($min + ($step * 6))) {
+    $chr = "▆";
+  } elsif ($v <= ($min + ($step * 7))) {
+    $chr = "▇";
+  } elsif ($v <= ($min + ($step * 8))) {
+    $chr = "▇";
+  } else {
+    $chr = "↑";
+  }
+  return $chr;
+}
+
+sub yearMarkers {
+  my @vals = @_;
+  my $ret = "";
+  my $i = 0;
+  for ($i = 0; $i < $#vals; $i++) {
+    if ($vals[$i] =~ /(\d{4})-01/) {
+      $ret .= "| $1";
+      $i += 4;
+    } else {
+      $ret .= " ";
+    }
+  }
+  return $ret;
+}
+
+sub monToNum {
+  my $mon = shift;
+  my $num = -1;
+
+  $num = "01" if uc $mon eq "JAN";
+  $num = "02" if uc $mon eq "FEB";
+  $num = "03" if uc $mon eq "MAR";
+  $num = "04" if uc $mon eq "APR";
+  $num = "05" if uc $mon eq "MAY";
+  $num = "06" if uc $mon eq "JUN";
+  $num = "07" if uc $mon eq "JUL";
+  $num = "08" if uc $mon eq "AUG";
+  $num = "09" if uc $mon eq "SEP";
+  $num = "10" if uc $mon eq "OCT";
+  $num = "11" if uc $mon eq "NOV";
+  $num = "12" if uc $mon eq "DEC";
+
+  return $num;
+}
